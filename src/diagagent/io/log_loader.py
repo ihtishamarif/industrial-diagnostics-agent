@@ -98,11 +98,15 @@ class DatasetStore:
     _meta: dict[str, dict[str, Any]] = field(default_factory=dict)
     _ids: Any = field(default_factory=lambda: itertools.count(1))
 
-    def add(self, df: pd.DataFrame, source: str) -> str:
+    def add(self, df: pd.DataFrame, source: str, **meta: Any) -> str:
         ds_id = f"ds{next(self._ids)}"
         self._data[ds_id] = df
-        self._meta[ds_id] = {"source": source}
+        self._meta[ds_id] = {"source": source, **meta}
         return ds_id
+
+    def meta(self, ds_id: str) -> dict[str, Any]:
+        self.get(ds_id)  # same error for unknown ids
+        return dict(self._meta[ds_id])
 
     def get(self, ds_id: str) -> pd.DataFrame:
         if ds_id not in self._data:

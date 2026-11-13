@@ -23,6 +23,9 @@ def get_llm(backend: str = "ollama", model: str | None = None, **kw: Any) -> Bas
     backend = backend.lower()
     if backend == "ollama":
         from langchain_ollama import ChatOllama
+        # Ollama defaults to a 4096-token context. One agent run carries the system
+        # prompt, all tool schemas and every tool result, so give it 8192.
+        kw.setdefault("num_ctx", int(os.getenv("DIAGAGENT_NUM_CTX", "8192")))
         return ChatOllama(model=model or os.getenv("DIAGAGENT_MODEL", "qwen2.5:7b"),
                           temperature=0, **kw)
     if backend == "anthropic":
@@ -88,18 +91,17 @@ class RuleBasedPlanner(BaseChatModel):
         if names == ["list_devices"]:
             dev = res[0][1][0]["device_id"]
             return AIMessage("", tool_calls=[
-                self._call(n, "read_device_params", {"device_id": dev}),
+                self._call(n, "get_device_info", {"device_id": dev}),
                 self._call(n + 1, "capture_step_test", {"device_id": dev}),
             ])
         dev = res[0][1][0]["device_id"]
-        params = next(p for nm, p in res if nm == "read_device_params")
         captures = [p["dataset_id"] for nm, p in res if nm == "capture_step_test"]
         analyses = [p for nm, p in res if nm == "analyze_control_loop"]
         last_name, last = res[-1]
 
         if last_name == "capture_step_test":
             return AIMessage("", tool_calls=[self._call(n, "analyze_control_loop", {
-                "dataset_id": last["dataset_id"], "u_min": params["u_min"], "u_max": params["u_max"]})])
+                "dataset_id": last["dataset_id"]})])
         if last_name == "analyze_control_loop" and len(analyses) == 1:
             if last["anomalies"]:
                 return AIMessage("", tool_calls=[self._call(n, "suggest_pid_retune", {

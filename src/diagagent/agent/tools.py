@@ -81,17 +81,26 @@ def build_tools(ctx: ToolContext) -> list[BaseTool]:
         return _j([{"device_id": d, "type": type(dev).__name__} for d, dev in ctx.devices.items()])
 
     @tool
-    def read_device_params(device_id: str) -> str:
-        """Read the current controller parameters (kp, ki, kd, output limits) from a device."""
-        return _j(ctx.device(device_id).read_params())
+    def get_device_info(device_id: str) -> str:
+        """Read a device's current PID gains, actuator limits, allowed step-test
+        setpoint range and writable parameter ranges. Call this before testing."""
+        return _j(ctx.device(device_id).info())
 
     @tool
-    def capture_step_test(device_id: str, setpoint: float = 1.0, duration: float = 30.0) -> str:
+    def capture_step_test(device_id: str, setpoint: float | None = None,
+                          duration: float | None = None) -> str:
         """Run a setpoint step test on a device and record t, setpoint, pv, u.
-        Returns a dataset_id to use with the analysis tools."""
-        df = ctx.device(device_id).capture(setpoint=setpoint, duration=duration)
-        ds = ctx.store.add(df, source=f"step_test:{device_id}")
-        return _j({"dataset_id": ds, **summarize(df)})
+        Leave setpoint and duration empty to use the device defaults; the device
+        rejects values outside its allowed range. Returns a dataset_id."""
+        dev = ctx.device(device_id)
+        test = dev.info()["step_test"]
+        sp = test["default_setpoint"] if setpoint is None else setpoint
+        dur = test["default_duration_s"] if duration is None else duration
+        df = dev.capture(setpoint=sp, duration=dur)
+        lim = dev.info()["actuator_limits"]
+        ds = ctx.store.add(df, source=f"step_test:{device_id}", device_id=device_id,
+                           u_min=lim["u_min"], u_max=lim["u_max"])
+        return _j({"dataset_id": ds, "setpoint": sp, "duration_s": dur, **summarize(df)})
 
     @tool
     def load_log_file(path: str, time_col: str = "t") -> str:
@@ -111,18 +120,28 @@ def build_tools(ctx: ToolContext) -> list[BaseTool]:
                              u_max: float | None = None) -> str:
         """Run deterministic detectors (step response, oscillation, saturation, noise,
         dropouts) on a closed-loop dataset. Returns anomalies with cited evidence and
-        ranked hypotheses."""
+        ranked hypotheses. For device step tests the actuator limits come from the
+        device; u_min/u_max are only used for log files where the user gave them."""
         df = ctx.store.get(dataset_id)
+        meta = ctx.store.meta(dataset_id)
+        limits_from = "user"
+        if "u_max" in meta:  # captured from a device: its limits win over model input
+            u_min, u_max, limits_from = meta["u_min"], meta["u_max"], "device"
+        elif u_min is None or u_max is None:
+            limits_from = "unknown (saturation check skipped)"
         r = ctl.analyze_control_loop(df, sp_col=sp_col, pv_col=pv_col,
                                  u_col=u_col if u_col in df else None,
                                  u_min=u_min, u_max=u_max)
         ctx.reports[dataset_id] = r
-        return _j({"dataset_id": dataset_id, **_compact_report(r)})
+        osc = r.get("oscillation")
+        return _j({"dataset_id": dataset_id, "actuator_limits_from": limits_from,
+                   "oscillating": bool(osc and osc.detected), **_compact_report(r)})
 
     @tool
     def suggest_pid_retune(dataset_id: str, device_id: str) -> str:
         """Propose new PID gains from the analysis of dataset_id and the device's current
-        gains. Does not change the device."""
+        gains. Call it whenever analyze_control_loop reports oscillation or a bad step
+        response. Does not change the device."""
         if dataset_id not in ctx.reports:
             return _j({"error": f"run analyze_control_loop on {dataset_id} first"})
         p = ctx.device(device_id).read_params()
@@ -150,5 +169,5 @@ def build_tools(ctx: ToolContext) -> list[BaseTool]:
         system will pause and ask the operator before anything is written."""
         raise ApprovalRequired("set_pid_gains must go through the approval node")
 
-    return [list_devices, read_device_params, capture_step_test, load_log_file, list_datasets,
+    return [list_devices, get_device_info, capture_step_test, load_log_file, list_datasets,
             analyze_control_loop, suggest_pid_retune, compare_datasets, set_pid_gains]

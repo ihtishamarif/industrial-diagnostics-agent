@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -9,7 +9,7 @@ description = "AI agent that diagnoses embedded and industrial systems from sign
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "Ihtisham Arif" }]
-license = { text = "MIT" }
+license = "MIT"
 dependencies = [
     "numpy>=1.26",
     "pandas>=2.1",

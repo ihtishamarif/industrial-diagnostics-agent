@@ -93,7 +93,7 @@ src/diagagent/
   devices/   base.py (WriteRequest, audit log), sim_device.py
   agent/     tools.py, graph.py (LangGraph + approval gate), llm.py, runner.py
   cli.py, report.py
-tests/       27 pytest tests, no LLM needed
+tests/       34 pytest tests, no LLM needed
 data/        sample_oscillating_loop.csv
 ```
 
@@ -131,7 +131,7 @@ scripted runs. Results go to `results/` (table, plot, audit log).
 | 1 | Simulated PID device with fault injection | done, tested |
 | 1 | LangGraph agent with approval gate and audit log | done, tested with offline planner |
 | 1 | PID oscillation demo, before/after table and plot | done (offline planner) |
-| 1 | Run demo with a local Ollama model | code path exists, not yet benchmarked |
+| 1 | Run demo with a local Ollama model | done: qwen2.5:7b on RTX 4070 Laptop (8 GB) completes diagnose, approve, retune, verify; same numbers as offline planner |
 | 1 | Demo GIF | planned |
 | 2 | MCP servers, Modbus RTU/TCP and Serial tools | planned |
 | 2 | Real hardware control demo (Arduino/ESP32 PID) | planned |
@@ -140,6 +140,21 @@ scripted runs. Results go to `results/` (table, plot, audit log).
 | 3 | RAG knowledge base over datasheets and manuals | planned |
 | 3 | Fault-injection benchmark | planned |
 | 4 | MQTT link to the IIoT monitoring node | planned |
+
+## Lessons from the first live LLM run
+
+The first run with `qwen2.5:7b` on Ollama (RTX 4070 Laptop, 8 GB) planned a sensible
+tool sequence but chose its own test conditions: a step test at setpoint 100 on a
+plant that can reach at most 10, plus actuator limits it made up. The detectors
+correctly reported 99.3 % actuator saturation, and the model then called that
+"instability". No write was proposed, so nothing reached the device.
+
+Fix: physical limits moved from the prompt into the tools. `get_device_info`
+reports the allowed setpoint range and actuator limits, the device refuses step
+tests it cannot reach, and `analyze_control_loop` always uses the device's own
+limits for captured data. The system prompt now gives a fixed workflow and only
+allows "oscillating" when the detector says so. `tests/test_guardrails.py`
+replays the bad tool calls and checks the agent gets an error and recovers.
 
 ## Known limitations (Phase 1)
 
