@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "diagagent"
+version = "0.1.0"
+description = "AI agent that diagnoses embedded and industrial systems from signals, with human-approved writes"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "Ihtisham Arif" }]
+license = { text = "MIT" }
+dependencies = [
+    "numpy>=1.26",
+    "pandas>=2.1",
+    "scipy>=1.11",
+    "matplotlib>=3.8",
+    "langchain-core>=0.3",
+    "langgraph>=0.2.60",
+]
+
+[project.optional-dependencies]
+ollama = ["langchain-ollama>=0.2"]
+anthropic = ["langchain-anthropic>=0.3"]
+dev = ["pytest>=8", "pytest-cov>=5"]
+
+[project.scripts]
+diagagent = "diagagent.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
