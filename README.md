@@ -11,6 +11,8 @@ Detectors are plain Python (numpy/scipy) and give the same answer every time. Th
 LLM decides which tool to call next and writes the report, citing the evidence the
 detectors returned.
 
+![demo](docs/demo.gif)
+
 > Status: **Phase 1 of 4 complete.** Everything below marked "planned" does not exist yet.
 > See [Status](#status).
 
@@ -134,7 +136,7 @@ scripted runs. Results go to `results/` (table, plot, audit log).
 | 1 | LangGraph agent with approval gate and audit log | done, tested with offline planner |
 | 1 | PID oscillation demo, before/after table and plot | done (offline planner) |
 | 1 | Run demo with a local Ollama model | done: qwen2.5:7b on RTX 4070 Laptop (8 GB) completes diagnose, approve, retune, verify; same numbers as offline planner |
-| 1 | Demo GIF | planned |
+| 1 | Demo GIF | done |
 | 2 | MCP servers, Modbus RTU/TCP and Serial tools | planned |
 | 2 | Real hardware control demo (Arduino/ESP32 PID) | planned |
 | 2 | Modbus/OpenPLC alarm diagnosis with a register map | planned |
