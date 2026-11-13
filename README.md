@@ -1,5 +1,7 @@
 # Embedded/Industrial Diagnostics Agent
 
+[![ci](https://github.com/ihtishamarif/industrial-diagnostics-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/ihtishamarif/industrial-diagnostics-agent/actions/workflows/ci.yml)
+
 An AI agent that connects to embedded and industrial systems, reads signals, detects
 anomalies, diagnoses the likely cause and suggests a fix. It only writes to a device
 after a human approves the change.
