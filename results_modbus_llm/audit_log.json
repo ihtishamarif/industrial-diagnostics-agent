@@ -1,0 +1,32 @@
+[
+  {
+    "time": "2026-11-14T13:01:30.501428+00:00",
+    "event": "approved_write",
+    "tool": "set_pid_gains",
+    "args": {
+      "reason": "Sustained oscillation: using Ku ~= 4 (current Kp) and Pu = 1.600s.",
+      "device_id": "modbus_pid_1",
+      "kp": 1.8182,
+      "ki": 0.5165,
+      "kd": 0.4618
+    },
+    "approved_by": "cli-operator"
+  },
+  {
+    "time": "2026-11-14T13:01:30.501405+00:00",
+    "event": "write_applied",
+    "device": "modbus_pid_1",
+    "before": {
+      "kp": 4.0,
+      "ki": 1.5,
+      "kd": 0.0
+    },
+    "after": {
+      "kp": 1.818,
+      "ki": 0.516,
+      "kd": 0.462
+    },
+    "reason": "Sustained oscillation: using Ku ~= 4 (current Kp) and Pu = 1.600s.",
+    "approved_by": "cli-operator"
+  }
+]

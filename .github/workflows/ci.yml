@@ -11,6 +11,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - run: pip install -e ".[dev]"
+      - run: pip install -e ".[dev,mcp,modbus]"
       - run: pytest
       - run: diagagent demo --backend offline --approve yes --out results
+      - run: diagagent demo --backend offline --device modbus --approve yes --out results_modbus
