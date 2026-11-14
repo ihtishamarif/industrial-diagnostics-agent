@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import argparse
+import atexit
 import json
 import sys
 from pathlib import Path
@@ -38,8 +39,22 @@ def _print_event(ev: dict) -> None:
                 print(f"[{node}] <- {m.name}: {txt[:160]}{'...' if len(txt) > 160 else ''}")
 
 
+def _make_device(kind: str):
+    """Build the device to diagnose. Returns (device, cleanup function)."""
+    if kind == "modbus":
+        from .devices.modbus_device import ModbusPIDDevice
+        from .sim.modbus_plc import SimulatedPLC, free_port
+
+        plc = SimulatedPLC(port=free_port()).start()  # a PLC stand-in, started in-process
+        dev = ModbusPIDDevice(port=plc.port)
+        print(f"Using a Modbus TCP device at 127.0.0.1:{plc.port}")
+        return dev, lambda: (dev.close(), plc.stop())
+    return SimulatedPIDDevice.oscillating_demo(), lambda: None
+
+
 def cmd_demo(a: argparse.Namespace) -> int:
-    dev = SimulatedPIDDevice.oscillating_demo()
+    dev, cleanup = _make_device(a.device)
+    atexit.register(cleanup)
     gains_before = dev.read_params()
     ctx = ToolContext(devices={dev.device_id: dev})
     app = build_graph(get_llm(a.backend, a.model), ctx)
@@ -88,6 +103,8 @@ def main(argv: list[str] | None = None) -> int:
     d = sub.add_parser("demo", help="simulated PID oscillation diagnosis and retune")
     d.add_argument("--backend", default="ollama", choices=["ollama", "anthropic", "offline"])
     d.add_argument("--model", default=None)
+    d.add_argument("--device", default="sim", choices=["sim", "modbus"],
+                   help="sim: in-process simulator; modbus: simulated PLC over Modbus TCP")
     d.add_argument("--approve", default="ask", choices=["ask", "yes", "no"])
     d.add_argument("--out", default="results")
     d.set_defaults(func=cmd_demo)

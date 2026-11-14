@@ -104,8 +104,15 @@ def create_server(tool_ctx: ToolContext, audit_out: Path | None = None) -> MCPSe
     return server
 
 
-def default_context() -> ToolContext:
-    dev = SimulatedPIDDevice.oscillating_demo()
+def default_context(modbus: str | None = None) -> ToolContext:
+    """The simulator by default, or a Modbus TCP device given as HOST:PORT."""
+    if modbus:
+        from .devices.modbus_device import ModbusPIDDevice
+
+        host, _, port = modbus.rpartition(":")
+        dev = ModbusPIDDevice(host=host or "127.0.0.1", port=int(port))
+    else:
+        dev = SimulatedPIDDevice.oscillating_demo()
     return ToolContext(devices={dev.device_id: dev})
 
 
@@ -113,9 +120,11 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="diagagent-mcp", description=__doc__.split("\n\n")[0])
     p.add_argument("--audit-out", type=Path, default=None,
                    help="write the audit log (approved and denied writes) to this JSON file")
+    p.add_argument("--modbus", metavar="HOST:PORT", default=None,
+                   help="use a Modbus TCP device (e.g. 127.0.0.1:5020) instead of the simulator")
     a = p.parse_args(argv)
     logging.basicConfig(stream=sys.stderr, level=logging.INFO)
-    create_server(default_context(), a.audit_out).run(transport="stdio")
+    create_server(default_context(a.modbus), a.audit_out).run(transport="stdio")
     return 0
 
 
