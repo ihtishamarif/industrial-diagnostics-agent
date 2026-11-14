@@ -104,9 +104,13 @@ def create_server(tool_ctx: ToolContext, audit_out: Path | None = None) -> MCPSe
     return server
 
 
-def default_context(modbus: str | None = None) -> ToolContext:
-    """The simulator by default, or a Modbus TCP device given as HOST:PORT."""
-    if modbus:
+def default_context(modbus: str | None = None, serial_port: str | None = None) -> ToolContext:
+    """The simulator by default, a Modbus TCP device (HOST:PORT) or a serial device."""
+    if serial_port:
+        from .devices.serial_device import SerialPIDDevice
+
+        dev = SerialPIDDevice(serial_port)
+    elif modbus:
         from .devices.modbus_device import ModbusPIDDevice
 
         host, _, port = modbus.rpartition(":")
@@ -122,9 +126,11 @@ def main(argv: list[str] | None = None) -> int:
                    help="write the audit log (approved and denied writes) to this JSON file")
     p.add_argument("--modbus", metavar="HOST:PORT", default=None,
                    help="use a Modbus TCP device (e.g. 127.0.0.1:5020) instead of the simulator")
+    p.add_argument("--serial", metavar="PORT", default=None,
+                   help="use a serial PID controller (e.g. /dev/ttyACM0) instead of the simulator")
     a = p.parse_args(argv)
     logging.basicConfig(stream=sys.stderr, level=logging.INFO)
-    create_server(default_context(a.modbus), a.audit_out).run(transport="stdio")
+    create_server(default_context(a.modbus, a.serial), a.audit_out).run(transport="stdio")
     return 0
 
 

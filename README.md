@@ -13,8 +13,9 @@ detectors returned.
 
 ![demo](docs/demo.gif)
 
-> Status: **Phase 1 of 4 complete; Phase 2 is partly done** (MCP server and Modbus TCP are
-> built and tested, real-hardware serial control is not). Everything marked "planned"
+> Status: **Phase 1 of 4 complete; Phase 2 is partly done** (MCP server, Modbus TCP and a
+> serial device with Arduino firmware are built and tested against simulators; the firmware
+> has not been run on the real board yet). Everything marked "planned"
 > does not exist yet.
 > See [Status](#status).
 
@@ -88,6 +89,29 @@ Register map (holding registers, real values stored as integers scaled by 1000):
 Write safety adds two layers on this path: the client reads every write back and fails
 if the device holds a different value, and the PLC checks gain limits itself and reverts
 anything out of range, so the safety does not rely on the client alone.
+
+### A serial device (Arduino Uno)
+
+`SerialPIDDevice` talks to a microcontroller over a serial port with a small ASCII line
+protocol (`GET`, `SET kp 1.8`, `SP 0.6`, `HOME`, `RUN`; the device streams `D,ms,sp,pv,u`
+lines while running). The protocol is documented in `devices/serial_protocol.py`. The
+firmware validates gain limits itself, the host reads every write back, and a capture is
+refused if the data is stale, has gaps or arrives damaged. Opening the port resets an
+Uno, so connecting waits about 2 s.
+
+`firmware/uno_pid/uno_pid.ino` is the Uno side: a 50 Hz PID position loop around an SG90
+servo, with a potentiometer on the servo horn on A0 as the measurement (wiring and a
+two-point calibration are in the sketch header). Without hardware, `diagagent-fw` or
+`diagagent demo --device serial` run a simulated firmware on a pseudo-terminal, so the
+host code is tested over a real serial device file. That simulated plant (servo lag, speed
+limit, pot noise, 10-bit ADC) is an emulation, not a measurement of the real servo.
+
+```bash
+pip install -e ".[serial]"
+diagagent demo --device serial --backend offline --approve yes                  # simulated firmware
+diagagent demo --device serial --serial-port /dev/ttyACM0 --backend ollama      # the real board
+claude mcp add diagagent -- "$(pwd)/.venv/bin/diagagent-mcp" --serial /dev/ttyACM0
+```
 
 ### The toolbox as an MCP server
 
@@ -181,13 +205,16 @@ src/diagagent/
              noise, drift, spikes), control.py (loop analysis, hypotheses, retune)
   io/        log_loader.py (CSV/TSV/Parquet/JSON to a standard frame, dataset store)
   sim/       pid_sim.py (FOPDT plant, PID with filter and anti-windup, fault injection),
-             modbus_plc.py (simulated PLC served over Modbus TCP)
+             modbus_plc.py (simulated PLC served over Modbus TCP),
+             serial_fw.py (simulated Arduino firmware on a pseudo-terminal)
   devices/   base.py (WriteRequest, audit log), sim_device.py,
-             modbus_device.py, modbus_regs.py (register map)
+             modbus_device.py, modbus_regs.py (register map),
+             serial_device.py, serial_protocol.py (line protocol)
   agent/     tools.py, graph.py (LangGraph + approval gate), llm.py, runner.py
   mcp_server.py   MCP server (stdio)
   cli.py, report.py
-tests/       58 pytest tests, no LLM needed
+firmware/    uno_pid/uno_pid.ino (Arduino Uno: servo + potentiometer PID loop)
+tests/       72 pytest tests, no LLM needed
 data/        sample_oscillating_loop.csv
 ```
 
@@ -232,8 +259,9 @@ scripted runs. Results go to `results/` (table, plot, audit log).
 | 1 | Demo GIF | done |
 | 2 | MCP server (read tools, write approval via elicitation) | done, tested with a scripted client |
 | 2 | Modbus TCP device + simulated PLC, `--device modbus` | done, tested; live run with qwen2.5:7b |
-| 2 | Serial tool, Modbus RTU | planned |
-| 2 | Real hardware control demo (Arduino/ESP32 PID) | planned |
+| 2 | Serial device + Uno firmware, `--device serial` | done, tested over a pseudo-terminal against simulated firmware; sketch written but not yet compiled or run on the board |
+| 2 | Real hardware control demo (Uno + servo + pot) | planned: needs wiring, calibration and a live run |
+| 2 | Modbus RTU | planned |
 | 2 | Modbus/OpenPLC alarm diagnosis with a register map | planned |
 | 3 | ROS 2 bag tools (IMU drift, dropouts, safety stops), CAN tools | planned |
 | 3 | RAG knowledge base over datasheets and manuals | planned |
@@ -275,14 +303,15 @@ data instead of trusting it.
 
 ## Known limitations (Phase 1 and 2)
 
-- The plant is a simulated first-order-plus-dead-time model, not hardware.
+- The plants are simulated (first-order-plus-dead-time, and a servo-plus-pot emulation), not hardware measurements.
+- The Arduino sketch has not been compiled or run on the board yet.
 - The retune rule assumes the oscillation is caused by excessive gain. In the demo
   the controller output also touches its lower limit during each cycle; the
   saturation detector reports 12 % time at limit, under its 20 % threshold.
 - The step-response detector uses raw samples, so heavy sensor noise inflates the
   overshoot value.
 - The Modbus device talks to a simulated PLC, not a real one or OpenPLC. Modbus RTU
-  and serial links are not built yet. The PLC runs 5x faster than real time by default.
+  is not built yet. The PLC runs 5x faster than real time by default.
 - The MCP server is tested with a scripted client. Whether a given real client (for
   example Claude Code or Claude Desktop) shows the approval prompt has not been
   verified; a client without elicitation support simply gets every write denied.

@@ -39,8 +39,21 @@ def _print_event(ev: dict) -> None:
                 print(f"[{node}] <- {m.name}: {txt[:160]}{'...' if len(txt) > 160 else ''}")
 
 
-def _make_device(kind: str):
+def _make_device(kind: str, serial_port: str | None = None):
     """Build the device to diagnose. Returns (device, cleanup function)."""
+    if kind == "serial":
+        from .devices.serial_device import SerialPIDDevice
+
+        if serial_port:  # real hardware: opening the port resets an Arduino
+            dev = SerialPIDDevice(serial_port)
+            print(f"Using the serial device on {serial_port}")
+            return dev, dev.close
+        from .sim.serial_fw import SimulatedFirmware
+
+        fw = SimulatedFirmware(time_scale=5.0).start()  # firmware stand-in on a pseudo-terminal
+        dev = SerialPIDDevice(fw.port, reset_delay=0.0)
+        print(f"Using simulated Arduino firmware on {fw.port}")
+        return dev, lambda: (dev.close(), fw.stop())
     if kind == "modbus":
         from .devices.modbus_device import ModbusPIDDevice
         from .sim.modbus_plc import SimulatedPLC, free_port
@@ -53,7 +66,7 @@ def _make_device(kind: str):
 
 
 def cmd_demo(a: argparse.Namespace) -> int:
-    dev, cleanup = _make_device(a.device)
+    dev, cleanup = _make_device(a.device, a.serial_port)
     atexit.register(cleanup)
     gains_before = dev.read_params()
     ctx = ToolContext(devices={dev.device_id: dev})
@@ -103,8 +116,11 @@ def main(argv: list[str] | None = None) -> int:
     d = sub.add_parser("demo", help="simulated PID oscillation diagnosis and retune")
     d.add_argument("--backend", default="ollama", choices=["ollama", "anthropic", "offline"])
     d.add_argument("--model", default=None)
-    d.add_argument("--device", default="sim", choices=["sim", "modbus"],
-                   help="sim: in-process simulator; modbus: simulated PLC over Modbus TCP")
+    d.add_argument("--device", default="sim", choices=["sim", "modbus", "serial"],
+                   help="sim: in-process simulator; modbus: simulated PLC over Modbus TCP; "
+                        "serial: Arduino-style firmware over a serial port (simulated unless --serial-port)")
+    d.add_argument("--serial-port", default=None, metavar="PORT",
+                   help="with --device serial: a real port such as /dev/ttyACM0")
     d.add_argument("--approve", default="ask", choices=["ask", "yes", "no"])
     d.add_argument("--out", default="results")
     d.set_defaults(func=cmd_demo)
