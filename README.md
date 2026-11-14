@@ -101,7 +101,9 @@ Uno, so connecting waits about 2 s.
 
 `firmware/uno_pid/uno_pid.ino` is the Uno side: a 50 Hz PID position loop around an SG90
 servo, with a potentiometer on the servo horn on A0 as the measurement (wiring and a
-two-point calibration are in the sketch header). Without hardware, `diagagent-fw` or
+two-point calibration are in the sketch header). The sketch has an `EMULATED_PLANT` switch:
+1 (the default) runs the servo and pot as a model inside the Uno, with the real servo moving
+for show and no pot coupling needed; 0 reads the real pot for a true closed loop. Without hardware, `diagagent-fw` or
 `diagagent demo --device serial` run a simulated firmware on a pseudo-terminal, so the
 host code is tested over a real serial device file. That simulated plant (servo lag, speed
 limit, pot noise, 10-bit ADC) is an emulation, not a measurement of the real servo.
@@ -259,7 +261,7 @@ scripted runs. Results go to `results/` (table, plot, audit log).
 | 1 | Demo GIF | done |
 | 2 | MCP server (read tools, write approval via elicitation) | done, tested with a scripted client |
 | 2 | Modbus TCP device + simulated PLC, `--device modbus` | done, tested; live run with qwen2.5:7b |
-| 2 | Serial device + Uno firmware, `--device serial` | done, tested over a pseudo-terminal against simulated firmware; sketch written but not yet compiled or run on the board |
+| 2 | Serial device + Uno firmware, `--device serial` | done, tested over a pseudo-terminal against simulated firmware; sketch compiled and flashed to an Uno (PING, GET, ADC, HOME answer on the board); closed-loop run in emulated-plant mode pending |
 | 2 | Real hardware control demo (Uno + servo + pot) | planned: needs wiring, calibration and a live run |
 | 2 | Modbus RTU | planned |
 | 2 | Modbus/OpenPLC alarm diagnosis with a register map | planned |
@@ -304,7 +306,7 @@ data instead of trusting it.
 ## Known limitations (Phase 1 and 2)
 
 - The plants are simulated (first-order-plus-dead-time, and a servo-plus-pot emulation), not hardware measurements.
-- The Arduino sketch has not been compiled or run on the board yet.
+- The Arduino sketch runs on the board, but its default plant is emulated in firmware; a loop closed through a real pot on the servo horn has not been run.
 - The retune rule assumes the oscillation is caused by excessive gain. In the demo
   the controller output also touches its lower limit during each cycle; the
   saturation detector reports 12 % time at limit, under its 20 % threshold.

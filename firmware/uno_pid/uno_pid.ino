@@ -18,10 +18,18 @@
  *   3. Send "HOME 1", wait 2 s, send "ADC". Write the number into ADC_AT_1.
  *   4. Re-upload. If the pot reads backwards, ADC_AT_0 > ADC_AT_1 handles it.
  *
+ * Plant modes (EMULATED_PLANT below)
+ *   1 = the Uno simulates the servo and pot in software (lag, speed limit, noise, 10-bit
+ *       ADC). The real servo still moves to the commanded position so you can watch it,
+ *       but the pot is not read. No pot-to-horn coupling needed. The plant is a model.
+ *   0 = real closed loop: pv comes from the pot on A0 (wiring and calibration above).
+ *
  * Units: setpoint and pv are normalized position 0..1 (1 = full servo travel),
  * u in [-1, 1] is a velocity command: commanded position += u * VMAX * dt.
  */
 #include <Servo.h>
+
+#define EMULATED_PLANT 1             // 1: simulated servo+pot plant, 0: read the real pot
 
 const uint8_t SERVO_PIN = 9;
 const uint8_t POT_PIN = A0;
@@ -49,9 +57,20 @@ unsigned long t0Ms = 0, nextUs = 0;
 char line[48];
 uint8_t len = 0;
 
+const float SERVO_TAU = 0.08f;       // s, lag between commanded and actual position (emulation)
+const float SERVO_MAX_RATE = 3.0f;   // position units per second (emulation)
+const float POT_NOISE = 0.003f;      // measurement noise, position units (emulation)
+float theta = 0.0f;                  // emulated actual servo position
+
 float readPv() {
+#if EMULATED_PLANT
+  float noise = random(-1000, 1001) / 1000.0f * POT_NOISE * 1.7f;   // roughly 0.003 std
+  float y = constrain(theta + noise, 0.0f, 1.0f);
+  return round(y * 1023.0f) / 1023.0f;                               // 10-bit quantization
+#else
   float y = (analogRead(POT_PIN) - ADC_AT_0) / (float)(ADC_AT_1 - ADC_AT_0);
   return constrain(y, 0.0f, 1.0f);
+#endif
 }
 
 void moveServo(float theta) {
@@ -76,6 +95,10 @@ void stepLoop() {
   float u = constrain(uUnsat, U_MIN, U_MAX);
   if (!((uUnsat > U_MAX && e > 0) || (uUnsat < U_MIN && e < 0))) integ += e * dt;  // anti-windup
   thetaCmd = constrain(thetaCmd + u * VMAX * dt, 0.0f, 1.0f);
+#if EMULATED_PLANT
+  float next = theta + (thetaCmd - theta) * (1.0f - exp(-dt / SERVO_TAU));
+  theta += constrain(next - theta, -SERVO_MAX_RATE * dt, SERVO_MAX_RATE * dt);
+#endif
   moveServo(thetaCmd);
   Serial.print(F("D,")); Serial.print(millis() - t0Ms);
   Serial.print(','); Serial.print(sp, 3);
@@ -116,13 +139,14 @@ void handle(char *cmd) {
     if (v < 0 || v > 1) { Serial.println(F("ERR range")); return; }
     servo.attach(SERVO_PIN);
     thetaCmd = v;
+    theta = v;
     moveServo(v);
     delay(1500);                       // let the servo arrive
     Serial.println(F("OK"));
   } else if (!strcmp(w, "RUN") && a) {
     if (a[0] == '1' && !running) {
       servo.attach(SERVO_PIN);
-      thetaCmd = readPv();             // bumpless start from where the servo is
+      thetaCmd = readPv();             // bumpless start from where the servo is (or is emulated)
       resetLoop();
       t0Ms = millis();
       nextUs = micros() + SAMPLE_US;
