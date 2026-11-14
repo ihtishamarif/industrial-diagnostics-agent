@@ -44,7 +44,14 @@ const float SP_MAX = 0.9f, BASE_SP = 0.2f;
 const unsigned long SAMPLE_US = 20000UL;   // 50 Hz
 
 const float KP_MAX = 50.0f, KI_MAX = 50.0f, KD_MAX = 20.0f;
-float kp = 3.0f, ki = 0.0f, kd = 0.0f;     // start conservative; the host retunes them
+// The gains reset whenever the board resets, and opening the serial port resets an Uno,
+// so these are what the host always starts from. The emulated plant starts with a bad
+// tune (Ki far too high) as the demo fault; the real-pot loop starts conservative.
+#if EMULATED_PLANT
+float kp = 3.0f, ki = 50.0f, kd = 0.0f;
+#else
+float kp = 3.0f, ki = 0.0f, kd = 0.0f;
+#endif
 
 Servo servo;
 bool running = false;
