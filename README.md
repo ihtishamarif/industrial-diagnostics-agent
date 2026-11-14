@@ -13,7 +13,9 @@ detectors returned.
 
 ![demo](docs/demo.gif)
 
-> Status: **Phase 1 of 4 complete.** Everything below marked "planned" does not exist yet.
+> Status: **Phase 1 of 4 complete; Phase 2 is partly done** (MCP server and Modbus TCP are
+> built and tested, real-hardware serial control is not). Everything marked "planned"
+> does not exist yet.
 > See [Status](#status).
 
 ## Phase 1 demo: PID oscillation diagnosis and retune
@@ -45,6 +47,79 @@ error(setpoint-pv) [1.38s to 27.50s]: period = 1.58s
 pv [1.00s to 30.00s]: overshoot_pct = 103.3% (threshold 10%)
 ```
 
+## Phase 2: MCP server and Modbus TCP
+
+Same agent, same tools, two new ways in and out.
+
+### The device is now a PLC reached over Modbus TCP
+
+`diagagent demo --device modbus` starts a simulated PLC (a `pymodbus` server running the
+same PID plant) and talks to it with real Modbus TCP traffic. The agent code did not
+change: `ModbusPIDDevice` implements the same `Device` interface as the simulator.
+`diagagent-plc` runs the PLC on its own (default port 5020) so any Modbus client can
+connect to it.
+
+![before vs after over Modbus](docs/modbus_before_after.png)
+
+| Metric | Before | After |
+|---|---|---|
+| Kp / Ki / Kd | 4 / 1.5 / 0 | 1.82 / 0.516 / 0.462 |
+| Overshoot [%] | 103.3 | 0.5 |
+| Settling time 2% [s] | not settled | 4.30 |
+| Rise time 10-90% [s] | 0.20 | 1.25 |
+| Sustained oscillation | yes | no |
+| Detected anomalies | 2 | 0 |
+
+Measured over Modbus TCP with `qwen2.5:7b` via Ollama, and reproduced with the offline
+planner. The gains differ slightly from the Phase 1 table because the PLC is sampled every
+0.05 s instead of 0.01 s.
+
+Register map (holding registers, real values stored as integers scaled by 1000):
+
+| Address | Meaning | Access |
+|---|---|---|
+| 0 / 1 / 2 | process value / setpoint / controller output (signed) | read / read-write / read |
+| 3 | simulated time since run start (units of 10 ms) | read |
+| 10 / 11 / 12 | Kp / Ki / Kd | read-write |
+| 20 | run flag (writing 1 resets the loop and starts it) | read-write |
+| 30 | status (1 = a gain write was rejected) | read |
+| 40 / 41 / 42 | actuator u_min / u_max / highest safe step setpoint | read |
+
+Write safety adds two layers on this path: the client reads every write back and fails
+if the device holds a different value, and the PLC checks gain limits itself and reverts
+anything out of range, so the safety does not rely on the client alone.
+
+### The toolbox as an MCP server
+
+MCP (Model Context Protocol) is an open standard that lets an AI client discover and call
+tools served by another process. `diagagent-mcp` exposes the same tools the LangGraph
+agent uses (`list_devices`, `get_device_info`, `capture_step_test`, `load_log_file`,
+`list_datasets`, `analyze_control_loop`, `suggest_pid_retune`, `compare_datasets`,
+`set_pid_gains`) over stdio, so one implementation serves both.
+
+```bash
+pip install -e ".[mcp]"
+# Claude Code
+claude mcp add diagagent -- "$(pwd)/.venv/bin/diagagent-mcp" --audit-out audit.json
+# point it at a Modbus device instead of the built-in simulator
+claude mcp add diagagent -- "$(pwd)/.venv/bin/diagagent-mcp" --modbus 127.0.0.1:5020
+```
+
+For other clients, register the same command in their MCP server settings, for example:
+
+```json
+{ "mcpServers": { "diagagent": {
+    "command": "/path/to/.venv/bin/diagagent-mcp",
+    "args": ["--audit-out", "/tmp/audit.json"] } } }
+```
+
+`set_pid_gains` is the only write tool, and the model cannot approve its own write. Before
+anything reaches the device, the server asks the human operator through the client
+(MCP elicitation: current gains, new gains, reason). If the operator declines, or the
+client cannot show the prompt, the write is denied and nothing changes. Every decision,
+approved or denied, goes to the audit log. This is covered by tests with a scripted
+client; see the limitations below for what has not been tried with a real client.
+
 ## Architecture
 
 ```mermaid
@@ -62,18 +137,24 @@ flowchart LR
     T --> D[Devices]
     H -->|approved only| D
     D --> SIM[Simulated PID<br/>phase 1]
-    D -.-> MB[Modbus / Serial<br/>phase 2, planned]
+    D --> MB[Modbus TCP device + simulated PLC<br/>phase 2]
+    D -.-> SER[Serial / real hardware<br/>phase 2, planned]
+    C[MCP client<br/>Claude Code, Desktop, ...] --> MCP[MCP server<br/>write approval via elicitation]
+    MCP --> T
     D -.-> R[ROS 2 / CAN<br/>phase 3, planned]
     D -.-> M[MQTT IIoT node<br/>phase 4, planned]
 ```
 
-Safety of writes is enforced in three places:
+Safety of writes is enforced in four places:
 
 1. The graph routes any write tool call to the approval node, which pauses with
    LangGraph `interrupt()` until a human answers.
 2. The write tool function itself raises `ApprovalRequired` if called directly.
 3. The device refuses any `WriteRequest` that is not marked approved, and checks
    parameter names and safe ranges. Every attempt goes to an audit log.
+4. Over MCP, `set_pid_gains` asks the operator through the client and is denied if
+   the client cannot ask. Over Modbus, writes are read back and the PLC enforces its
+   own gain limits.
 
 ### Short glossary (for the AI parts)
 
@@ -85,6 +166,12 @@ Safety of writes is enforced in three places:
   its state so it can resume later with the human's answer.
 - **Offline planner**: a fixed rule script that stands in for the LLM so the full graph
   runs in CI without a GPU. It is not an LLM and its report is a template.
+- **MCP (Model Context Protocol)**: an open standard for exposing tools to AI clients.
+  The client lists the server's tools and calls them; the server does the work.
+- **Elicitation**: an MCP feature where the server asks the client's user a question
+  mid-call. Here it is how the operator approves a write.
+- **Modbus TCP**: an industrial protocol where a client reads and writes numbered
+  16-bit registers on a PLC over TCP. Real numbers travel as scaled integers.
 
 ## Repository layout
 
@@ -93,11 +180,14 @@ src/diagagent/
   signals/   detectors.py (oscillation, step response, saturation, dropouts,
              noise, drift, spikes), control.py (loop analysis, hypotheses, retune)
   io/        log_loader.py (CSV/TSV/Parquet/JSON to a standard frame, dataset store)
-  sim/       pid_sim.py (FOPDT plant, PID with filter and anti-windup, fault injection)
-  devices/   base.py (WriteRequest, audit log), sim_device.py
+  sim/       pid_sim.py (FOPDT plant, PID with filter and anti-windup, fault injection),
+             modbus_plc.py (simulated PLC served over Modbus TCP)
+  devices/   base.py (WriteRequest, audit log), sim_device.py,
+             modbus_device.py, modbus_regs.py (register map)
   agent/     tools.py, graph.py (LangGraph + approval gate), llm.py, runner.py
+  mcp_server.py   MCP server (stdio)
   cli.py, report.py
-tests/       34 pytest tests, no LLM needed
+tests/       58 pytest tests, no LLM needed
 data/        sample_oscillating_loop.csv
 ```
 
@@ -105,7 +195,7 @@ data/        sample_oscillating_loop.csv
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev,ollama]"
+pip install -e ".[dev,ollama,mcp,modbus]"
 pytest
 
 # No LLM needed: deterministic detectors on a log file
@@ -113,6 +203,9 @@ diagagent analyze data/sample_oscillating_loop.csv --u-min 0 --u-max 5
 
 # Full agent loop with the offline planner (CI-friendly)
 diagagent demo --backend offline --approve ask
+
+# Same agent, but the device is a simulated PLC reached over Modbus TCP
+diagagent demo --backend offline --device modbus --approve ask
 
 # Full agent loop with a local LLM via Ollama
 ollama pull qwen2.5:7b
@@ -137,7 +230,9 @@ scripted runs. Results go to `results/` (table, plot, audit log).
 | 1 | PID oscillation demo, before/after table and plot | done (offline planner) |
 | 1 | Run demo with a local Ollama model | done: qwen2.5:7b on RTX 4070 Laptop (8 GB) completes diagnose, approve, retune, verify; same numbers as offline planner |
 | 1 | Demo GIF | done |
-| 2 | MCP servers, Modbus RTU/TCP and Serial tools | planned |
+| 2 | MCP server (read tools, write approval via elicitation) | done, tested with a scripted client |
+| 2 | Modbus TCP device + simulated PLC, `--device modbus` | done, tested; live run with qwen2.5:7b |
+| 2 | Serial tool, Modbus RTU | planned |
 | 2 | Real hardware control demo (Arduino/ESP32 PID) | planned |
 | 2 | Modbus/OpenPLC alarm diagnosis with a register map | planned |
 | 3 | ROS 2 bag tools (IMU drift, dropouts, safety stops), CAN tools | planned |
@@ -160,7 +255,25 @@ limits for captured data. The system prompt now gives a fixed workflow and only
 allows "oscillating" when the detector says so. `tests/test_guardrails.py`
 replays the bad tool calls and checks the agent gets an error and recovers.
 
-## Known limitations (Phase 1)
+## Lessons from the Modbus integration
+
+The first Modbus run looked like a success but was not. After the retune, the results
+table said "not settled" while the model's summary said the loop was "settling smoothly".
+The table was right. The simulated PLC kept the previous run's registers (clock at 30 s,
+old process value) after the loop stopped, so the second step test read a stale clock,
+decided it was finished after one sample, and returned a flat line.
+
+Fixes: the PLC clears its outputs when the loop stops, the client waits for that before
+starting, and the client now refuses data whose first sample is not near t = 0 or that has
+a gap longer than 1 s, so stale data raises an error instead of looking like a result. The
+new tests compare the Modbus result with the in-process simulator and fail if the bug
+is put back.
+
+Takeaways: check the model's prose against the measured numbers (the 7B model also said
+Kd was "kept" when it went from 0 to 0.46), and make the data path refuse implausible
+data instead of trusting it.
+
+## Known limitations (Phase 1 and 2)
 
 - The plant is a simulated first-order-plus-dead-time model, not hardware.
 - The retune rule assumes the oscillation is caused by excessive gain. In the demo
@@ -168,6 +281,13 @@ replays the bad tool calls and checks the agent gets an error and recovers.
   saturation detector reports 12 % time at limit, under its 20 % threshold.
 - The step-response detector uses raw samples, so heavy sensor noise inflates the
   overshoot value.
+- The Modbus device talks to a simulated PLC, not a real one or OpenPLC. Modbus RTU
+  and serial links are not built yet. The PLC runs 5x faster than real time by default.
+- The MCP server is tested with a scripted client. Whether a given real client (for
+  example Claude Code or Claude Desktop) shows the approval prompt has not been
+  verified; a client without elicitation support simply gets every write denied.
+- The LLM's written summary can contain mistakes. The table and the cited tool
+  outputs are the source of truth.
 
 ## License
 
