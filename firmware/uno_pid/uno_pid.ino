@@ -10,10 +10,10 @@
  *            and a two-point calibration.
  *
  * Wiring, PLANT 2
- *   D3 (PWM) -> 220 ohm -> LED anode (long leg); LED cathode (short leg) -> GND
- *   Optional finer PWM: set LED_HIRES to 1 and move the LED wire to D9 (Timer1, 12 bit,
- *   3.9 kHz). The LDR curve is steep at low brightness, so one 8-bit step on D3 moves pv by
- *   up to about 0.03 there; the 12-bit PWM makes that step negligible.
+ *   D9 -> 220 ohm -> LED anode (long leg); LED cathode (short leg) -> GND
+ *   D9 is driven by Timer1 as a 12-bit PWM (3.9 kHz). The LDR curve is steep at low
+ *   brightness, so one 8-bit step moves pv by up to about 0.03 there; 12 bits make that
+ *   negligible. To use D3 instead (8-bit analogWrite), set LED_HIRES to 0 and move the wire.
  *   5V -> LDR -> A0, and A0 -> 10 kohm -> GND   (A0 is the middle of the divider)
  *   Face the LED at the LDR, 3 to 10 mm apart, and tape a dark tube around both so room
  *   light does not dominate. Nothing else may be connected to A0 (unplug the pot wiper).
@@ -55,7 +55,7 @@
 
 #define PLANT 2                      // 2: LED + LDR, 1: emulated servo + pot, 0: servo + real pot
 #define AUTO_CAL 1                   // PLANT 2: calibrate LED off / full at every reset
-#define LED_HIRES 0                  // PLANT 2: 0 = LED on D3, 8-bit PWM; 1 = LED on D9, 12-bit PWM
+#define LED_HIRES 1                  // PLANT 2: 1 = LED on D9, 12-bit PWM; 0 = LED on D3, 8-bit PWM
 
 #define EMULATED_PLANT (PLANT == 1)
 #define LDR_PLANT (PLANT == 2)
