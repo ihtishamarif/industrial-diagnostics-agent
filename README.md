@@ -332,7 +332,7 @@ agent framework will do that.
 ## Known limitations (Phase 1 and 2)
 
 - The plants are simulated (first-order-plus-dead-time, and a servo-plus-pot emulation), not hardware measurements.
-- The Arduino sketch ran on the board only in its servo plant modes. The LED + LDR mode (now the default) is written and tested against a simulated plant, but has not been compiled for the AVR or run on the board yet, and a loop closed through the real LDR has not been run. Its demo gains are a first guess for the real parts.
+- The LED + LDR loop ran on the real board and the agent diagnosed and retuned it end to end, but the simulated LED plant is not yet calibrated to the measured one (static curve, Ku about 0.5 to 1, Pu 0.2 s), so simulated and real gains differ by an order of magnitude. The real plant is strongly nonlinear: with the LED close to the LDR the reading saturates at a small duty, and the gain in the demo's operating region is about 3 reading units per unit of duty.
 - On the simulated LED plant the retune works for an aggressive-but-settling tune (27 % overshoot to 6.7 %), but not for a high Kp that makes the LED duty bounce between 0 and 1: there the Tyreus-Luyben rule takes the current Kp as the ultimate gain, which overestimates it when saturation is what limits the oscillation, and the retuned loop still rings (about 50 % overshoot in simulation).
 - The retune rule assumes the oscillation is caused by excessive gain. In the demo
   the controller output also touches its lower limit during each cycle; the

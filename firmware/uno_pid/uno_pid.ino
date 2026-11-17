@@ -84,15 +84,16 @@ const unsigned long SAMPLE_US = 20000UL;      // 50 Hz
 const float KP_MAX = 50.0f, KI_MAX = 50.0f, KD_MAX = 20.0f;
 // The gains reset whenever the board resets, and opening the serial port resets an Uno,
 // so these are what the host always starts from. The emulated plant and the LED loop start
-// with a bad tune as the demo fault; the real-pot servo loop starts conservative. The LED
-// values (aggressive Kp and Ki, overshoot in simulation) are a first guess for the real
-// LDR: if the loop does not visibly overshoot on your bench, raise kp (limit 50); if it
-// rings without settling, lower it. Strong Kp makes a saturating limit cycle (LED duty
-// bouncing between 0 and 1), which the Tyreus-Luyben retune does not cure well.
+// with a bad tune as the demo fault; the real-pot servo loop starts conservative.
+// LED + LDR, measured on the bench (2026-11-17, LED a few cm from the LDR, P-only loop):
+// stable at kp 0.5, sustained oscillation at kp 1 with a 0.2 s period, so Ku is between 0.5
+// and 1 and Pu is 0.2 s. The demo fault starts just above Ku. Re-measure with
+// scripts/gain_sweep.py if you move the LED or the LDR: the plant gain depends on the
+// geometry (too close and the LDR saturates at a small duty, and everything oscillates).
 #if EMULATED_PLANT
 float kp = 3.0f, ki = 50.0f, kd = 0.0f;
 #elif LDR_PLANT
-float kp = 10.0f, ki = 20.0f, kd = 0.0f;
+float kp = 1.0f, ki = 1.0f, kd = 0.0f;
 #else
 float kp = 3.0f, ki = 0.0f, kd = 0.0f;
 #endif
