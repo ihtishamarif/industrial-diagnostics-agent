@@ -169,3 +169,18 @@ def test_led_retune_cuts_the_overshoot(led_dev):
     after = led_dev.capture(duration=DURATION)
     assert _overshoot(after) < 0.5 * _overshoot(before)
     assert abs(after[after.t > 7].pv.mean() - 0.6) < 0.03
+
+
+# ---- the agent runs tool calls of one step in parallel threads: the port must be shared safely ----
+
+def test_parallel_calls_from_several_threads_do_not_corrupt_the_port(dev):
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        cap = ex.submit(dev.capture, duration=3.0)
+        infos = [ex.submit(dev.info) for _ in range(3)]
+        reads = [ex.submit(dev.read_params) for _ in range(3)]
+        for f in infos + reads:
+            f.result(timeout=30)          # raises if the replies were interleaved or damaged
+        df = cap.result(timeout=30)
+    assert len(df) > 10 and df.t.iloc[-1] == pytest.approx(3.0)

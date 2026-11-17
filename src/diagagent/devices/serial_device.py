@@ -7,6 +7,8 @@ time on the microcontroller. Writes are verified by reading the gains back.
 
 from __future__ import annotations
 
+import functools
+import threading
 import time
 from typing import Any, Callable
 
@@ -26,6 +28,20 @@ GRID_DT = 0.05
 MAX_BAD_FRACTION = 0.05   # more damaged data lines than this and the capture is refused
 
 
+def _exclusive(method):
+    """Hold the device lock for the whole call.
+
+    The agent runs the tool calls of one step in parallel threads, and a serial port is one
+    byte stream: two threads reading it at once steal each other's bytes (damaged lines,
+    "multiple access on port"). A lock per device makes a call wait for the one before it.
+    """
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+    return wrapper
+
+
 class SerialPIDDevice:
     def __init__(self, port: str, baud: int = P.BAUD, device_id: str = "serial_pid_1",
                  audit: AuditLog | None = None, reset_delay: float = 2.0,
@@ -36,6 +52,7 @@ class SerialPIDDevice:
         self.reset_delay, self.timeout = reset_delay, timeout
         self._ser: serial.Serial | None = None
         self._buf = b""
+        self._lock = threading.RLock()       # re-entrant: public methods call each other
 
     # ---- low-level access -----------------------------------------------------------
     def _open(self) -> serial.Serial:
@@ -58,6 +75,7 @@ class SerialPIDDevice:
         ser.close()
         raise ConnectionError(f"no diagfw firmware answered on {self.port}")
 
+    @_exclusive
     def close(self) -> None:
         if self._ser is not None:
             self._ser.close()
@@ -105,6 +123,7 @@ class SerialPIDDevice:
         g = self._get()
         return {k: g[k] for k in ("kp", "ki", "kd")}
 
+    @_exclusive
     def read_params(self) -> dict[str, float]:
         g = self._get()
         return {"kp": g["kp"], "ki": g["ki"], "kd": g["kd"], "u_min": g["umin"], "u_max": g["umax"]}
@@ -117,6 +136,7 @@ class SerialPIDDevice:
         return ("setpoint and pv are the normalized sensor reading (0 to 1); "
                 f"u is the actuator drive (LED duty) in [{g['umin']:g}, {g['umax']:g}]")
 
+    @_exclusive
     def info(self) -> dict[str, Any]:
         g = self._get()
         return {
@@ -135,6 +155,7 @@ class SerialPIDDevice:
             "transport": {"protocol": "serial-ascii", "port": self.port, "baud": self.baud},
         }
 
+    @_exclusive
     def apply(self, req: WriteRequest) -> dict[str, Any]:
         if not req.approved:
             self.audit.record(event="write_blocked", device=self.device_id, params=req.params)
@@ -159,6 +180,7 @@ class SerialPIDDevice:
                           after=after, reason=req.reason, approved_by=req.approved_by)
         return {"device_id": self.device_id, "before": before, "after": after}
 
+    @_exclusive
     def capture(self, setpoint: float = DEFAULT_SETPOINT, duration: float = DEFAULT_DURATION,
                 **_: Any) -> pd.DataFrame:
         """Home the actuator, run a step test, return t, setpoint, pv, u on a uniform grid."""

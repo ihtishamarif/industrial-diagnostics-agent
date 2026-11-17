@@ -226,7 +226,7 @@ src/diagagent/
   mcp_server.py   MCP server (stdio)
   cli.py, report.py
 firmware/    uno_pid/uno_pid.ino (Arduino Uno: PID loop, LED + LDR / servo + pot plants)
-tests/       77 pytest tests, no LLM needed
+tests/       78 pytest tests, no LLM needed
 data/        sample_oscillating_loop.csv
 ```
 
@@ -312,6 +312,22 @@ is put back.
 Takeaways: check the model's prose against the measured numbers (the 7B model also said
 Kd was "kept" when it went from 0 to 0.46), and make the data path refuse implausible
 data instead of trusting it.
+
+## Lesson from the first run on the real board
+
+The first demo on the Uno failed at its very first serial reads with `SerialException:
+device reports readiness to read but returned no data` and `ValueError: could not convert
+string to float: ''`, and the same demo failed intermittently in CI against the simulated
+firmware (the Modbus demos never did). The wiring was fine: `PING`, `CAL` and `GET` worked
+by hand. The cause was in the host: the agent runs the tool calls of one step in parallel
+threads, here `get_device_info` and `capture_step_test`, and both read the same serial port.
+A serial port is one byte stream, so the threads stole each other's bytes.
+
+Fix: `SerialPIDDevice` holds a lock for the whole of every public call, so a call waits for
+the one before it. A new test calls the device from four threads at once; before the fix it
+failed 3 times out of 3 with the two errors above, after it it passes. Takeaway: a device
+object that wraps one physical link must be safe to call from several threads, because the
+agent framework will do that.
 
 ## Known limitations (Phase 1 and 2)
 
