@@ -146,6 +146,15 @@ class RetuneProposal:
                 "evidence": list(self.evidence)}
 
 
+MIN_SAMPLES_PER_PERIOD_FOR_D = 8   # a derivative term needs a period spanning several samples
+
+
+def _sample_dt(report: LoopReport) -> float | None:
+    drop = report.get("dropouts")
+    dt = drop.details.get("nominal_dt_s") if drop else None
+    return float(dt) if dt else None
+
+
 def suggest_pid_retune(report: LoopReport, kp: float, ki: float, kd: float = 0.0,
                        use_derivative: bool = True) -> RetuneProposal | None:
     """Return new gains, or None if the loop needs no retune.
@@ -156,6 +165,10 @@ def suggest_pid_retune(report: LoopReport, kp: float, ki: float, kd: float = 0.0
     loop oscillates at a Kp below the true Ku, so this estimate is on the
     conservative side.
 
+    If the oscillation period is only a few samples long (the loop flips every sample or
+    two), a derivative term acts on sample-to-sample noise and adds gain right at the
+    Nyquist frequency, which makes the loop worse, so the PI rule is used instead.
+
     Weakly damped oscillation or large overshoot: scale Kp and Ki down by 40 %.
     """
     osc = report.get("oscillation")
@@ -163,7 +176,9 @@ def suggest_pid_retune(report: LoopReport, kp: float, ki: float, kd: float = 0.0
 
     if osc and osc.detected and osc.details["decay_ratio"] >= 0.9:
         ku, pu = kp, osc.details["period_s"]
-        if use_derivative:
+        dt = _sample_dt(report)
+        short = bool(dt and pu < MIN_SAMPLES_PER_PERIOD_FOR_D * dt)
+        if use_derivative and not short:
             new_kp = ku / 2.2
             ti, td = 2.2 * pu, pu / 6.3
             new_ki, new_kd = new_kp / ti, new_kp * td
@@ -173,9 +188,11 @@ def suggest_pid_retune(report: LoopReport, kp: float, ki: float, kd: float = 0.0
             ti = 2.2 * pu
             new_ki, new_kd = new_kp / ti, 0.0
             method = "Tyreus-Luyben PI"
+        note = (f" The period is only {pu / dt:.1f} samples, so no derivative term is used."
+                if short and use_derivative else "")
         return RetuneProposal(
             new_kp, new_ki, new_kd, method,
-            f"Sustained oscillation: using Ku ~= {ku:g} (current Kp) and Pu = {pu:.3f}s.",
+            f"Sustained oscillation: using Ku ~= {ku:g} (current Kp) and Pu = {pu:.3f}s.{note}",
             tuple(e.cite() for e in osc.evidence))
 
     if (osc and osc.detected) or (step and step.detected and step.details.get("overshoot_pct", 0) > 0):

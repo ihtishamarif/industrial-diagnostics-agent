@@ -24,7 +24,7 @@ MAX_DURATION = 60.0
 DEFAULT_DURATION = 10.0
 DEFAULT_SETPOINT = 0.6
 T_STEP = 1.0
-GRID_DT = 0.05
+GRID_DT = P.SAMPLE_DT   # the loop's own sample time: a coarser grid aliases fast oscillations
 MAX_BAD_FRACTION = 0.05   # more damaged data lines than this and the capture is refused
 
 

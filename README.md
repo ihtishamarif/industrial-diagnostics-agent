@@ -226,7 +226,7 @@ src/diagagent/
   mcp_server.py   MCP server (stdio)
   cli.py, report.py
 firmware/    uno_pid/uno_pid.ino (Arduino Uno: PID loop, LED + LDR / servo + pot plants)
-tests/       79 pytest tests, no LLM needed
+tests/       81 pytest tests, no LLM needed
 data/        sample_oscillating_loop.csv
 ```
 
@@ -332,8 +332,8 @@ agent framework will do that.
 ## Known limitations (Phase 1 and 2)
 
 - The plants are simulated (first-order-plus-dead-time, and a servo-plus-pot emulation), not hardware measurements.
-- The LED + LDR loop ran on the real board and the agent diagnosed and retuned it end to end, but the simulated LED plant is not yet calibrated to the measured one (static curve, Ku about 0.5 to 1, Pu 0.2 s), so simulated and real gains differ by an order of magnitude. The real plant is strongly nonlinear: with the LED close to the LDR the reading saturates at a small duty, and the gain in the demo's operating region is about 3 reading units per unit of duty.
-- On the simulated LED plant the retune works for an aggressive-but-settling tune (27 % overshoot to 6.7 %), but not for a high Kp that makes the LED duty bounce between 0 and 1: there the Tyreus-Luyben rule takes the current Kp as the ultimate gain, which overestimates it when saturation is what limits the oscillation, and the retuned loop still rings (about 50 % overshoot in simulation).
+- The LED + LDR loop ran on the real board. The simulated LED plant uses the measured static curve (duty to reading), but its lag (25 ms) and noise are assumed, tuned so Ku is about 0.5 to 1 and the loop oscillates at the Nyquist frequency like the bench plant. Real-board before/after numbers are only quoted once a run has actually succeeded.
+- Captures are taken at the loop's native 50 Hz. An earlier 20 Hz resample aliased the real 25 Hz oscillation to 5 Hz, so the retune used a period five times too long; a regression test now guards this. When the oscillation period is under 8 samples the retune uses PI, because derivative action adds gain at the Nyquist frequency.
 - The retune rule assumes the oscillation is caused by excessive gain. In the demo
   the controller output also touches its lower limit during each cycle; the
   saturation detector reports 12 % time at limit, under its 20 % threshold.

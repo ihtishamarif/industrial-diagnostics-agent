@@ -38,15 +38,19 @@ SERVO_MAX_RATE = 3.0    # position units per second (a fast SG90)
 ADC_STEPS = 1023
 POT_NOISE = 0.003
 
-LED_TAU_RISE = 0.04     # s, light output follows a rising duty
-LED_TAU_FALL = 0.10     # s, and a falling one more slowly (the LDR is the slow part)
-LDR_GAMMA = 0.7         # LDR reading vs light: concave, pv = light ** gamma
-LDR_NOISE = 0.004
+# Static curve of the real LED + LDR pair, measured on the bench (2026-11-17, LED about a few
+# centimetres from the LDR): LED duty -> normalized LDR reading. Steep at low duty.
+LED_DUTY_PTS = (0.0, 0.02, 0.04, 0.06, 0.08, 0.10, 0.15, 0.20, 0.30, 0.40, 0.50, 0.70, 1.0)
+LED_PV_PTS = (0.0, 0.10, 0.25, 0.33, 0.40, 0.50, 0.59, 0.67, 0.77, 0.84, 0.88, 0.95, 1.0)
+LED_TAU_RISE = 0.025    # s, assumed: light output follows a rising duty
+LED_TAU_FALL = 0.025    # s, assumed: and a falling one more slowly (the LDR is the slow part)
+LED_DELAY = 0           # samples, assumed: PWM update to LDR response (turn-on lag of the LDR)
+LDR_NOISE = 0.004       # measured: std 0.0044 at constant light
 
 PLANTS = ("servo", "led")
 DEFAULT_GAINS = {
     "servo": {"kp": 3.0, "ki": 50.0, "kd": 0.0},
-    "led": {"kp": 10.0, "ki": 20.0, "kd": 0.0},
+    "led": {"kp": 1.0, "ki": 1.0, "kd": 0.0},
 }
 
 
@@ -64,6 +68,7 @@ class _FwLoop:
         self.plant = plant
         self.u_min, self.u_max = u_limits(plant)
         self.theta_cmd = self.theta = start_pos     # servo position, or LED light output
+        self.u_queue = [start_pos] * LED_DELAY
         self.integ = self.d_state = 0.0
         self.y_prev: float | None = None
         self.steps = 0
@@ -76,7 +81,7 @@ class _FwLoop:
 
     def _measure(self) -> float:
         if self.plant == "led":
-            y = max(self.theta, 0.0) ** LDR_GAMMA + self.rng.normal(0.0, LDR_NOISE)
+            y = float(np.interp(self.theta, LED_DUTY_PTS, LED_PV_PTS)) + self.rng.normal(0.0, LDR_NOISE)
         else:
             y = self.theta + self.rng.normal(0.0, POT_NOISE)
         return round(min(max(y, 0.0), 1.0) * ADC_STEPS) / ADC_STEPS
@@ -95,8 +100,10 @@ class _FwLoop:
         if not ((u_unsat > self.u_max and e > 0) or (u_unsat < self.u_min and e < 0)):
             self.integ += e * dt
         if self.plant == "led":
-            tau = LED_TAU_RISE if u > self.theta else LED_TAU_FALL
-            self.theta += (u - self.theta) * (1 - math.exp(-dt / tau))
+            self.u_queue.append(u)
+            u_eff = self.u_queue.pop(0)                      # the LED drive reaches the LDR late
+            tau = LED_TAU_RISE if u_eff > self.theta else LED_TAU_FALL
+            self.theta += (u_eff - self.theta) * (1 - math.exp(-dt / tau))
         else:
             self.theta_cmd = min(max(self.theta_cmd + u * P.VMAX * dt, 0.0), 1.0)
             target = self.theta + (self.theta_cmd - self.theta) * (1 - self.a)
@@ -220,7 +227,7 @@ class SimulatedFirmware:
             if self._loop is not None or not (0.0 <= v <= 1.0):
                 return self._send("ERR state" if self._loop else "ERR range")
             # servo: position v. LED: the light that makes the LDR read v (as the firmware does)
-            self.pos = v ** (1.0 / LDR_GAMMA) if self.plant == "led" else v
+            self.pos = float(np.interp(v, LED_PV_PTS, LED_DUTY_PTS)) if self.plant == "led" else v
             self._send("OK")
         elif w[0] == "RUN" and len(w) == 2 and w[1] in ("0", "1"):
             if w[1] == "1" and self._loop is None:

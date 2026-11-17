@@ -149,18 +149,21 @@ def test_led_plant_reports_its_own_limits_and_units(led_dev):
     info = led_dev.info()
     assert info["actuator_limits"] == {"u_min": P.LED_U_MIN, "u_max": P.LED_U_MAX}
     assert "LED duty" in info["units"] and "velocity" not in info["units"]
-    assert info["gains"] == {"kp": 10.0, "ki": 20.0, "kd": 0.0}
+    assert info["gains"] == {"kp": 1.0, "ki": 1.0, "kd": 0.0}
 
 
 def test_servo_plant_units_still_say_velocity(dev):
     assert "velocity command" in dev.info()["units"]
 
 
-def test_led_capture_stays_inside_duty_limits_and_overshoots(led_dev):
+def test_led_capture_runs_at_the_native_sample_rate(led_dev):
+    df = led_dev.capture(duration=3.0)
+    assert df.t.diff().median() == pytest.approx(P.SAMPLE_DT, abs=1e-6)
+
+
+def test_led_capture_stays_inside_duty_limits(led_dev):
     df = led_dev.capture(duration=DURATION)
     assert df.u.min() >= P.LED_U_MIN - 1e-9 and df.u.max() <= P.LED_U_MAX + 1e-9
-    assert _overshoot(df) > 0.15
-    assert abs(df[df.t > 6].pv.mean() - 0.6) < 0.03      # integral action still reaches the setpoint
 
 
 def test_led_home_goes_to_the_base_setpoint_not_to_duty_equals_pv(led_dev):
@@ -170,12 +173,30 @@ def test_led_home_goes_to_the_base_setpoint_not_to_duty_equals_pv(led_dev):
     assert abs(again.pv.iloc[0] - P.BASE_SP) < 0.05
 
 
-def test_led_retune_cuts_the_overshoot(led_dev):
-    before = led_dev.capture(duration=DURATION)
-    led_dev.apply(_approved(kp=6.0, ki=12.0, kd=0.0))
+def test_led_high_gain_oscillates_at_the_nyquist_period_and_is_seen_as_such(led_dev):
+    """Regression for the real-board failure: a resampled 20 Hz grid aliased the 25 Hz
+    oscillation to 5 Hz, so the retune used a Pu five times too long."""
+    from diagagent.signals.control import analyze_control_loop
+
+    led_dev.apply(_approved(kp=3.0, ki=0.0, kd=0.0))
+    df = led_dev.capture(duration=DURATION)
+    rep = analyze_control_loop(df, u_min=P.LED_U_MIN, u_max=P.LED_U_MAX)
+    osc = rep.get("oscillation")
+    assert osc.detected and osc.details["period_s"] < 4 * P.SAMPLE_DT
+
+
+def test_led_retune_of_a_nyquist_oscillation_uses_pi_and_stabilises(led_dev):
+    from diagagent.signals.control import analyze_control_loop, suggest_pid_retune
+
+    led_dev.apply(_approved(kp=3.0, ki=0.0, kd=0.0))
+    df = led_dev.capture(duration=DURATION)
+    rep = analyze_control_loop(df, u_min=P.LED_U_MIN, u_max=P.LED_U_MAX)
+    prop = suggest_pid_retune(rep, 3.0, 0.0, 0.0)
+    assert prop is not None and prop.kd == 0.0 and "PI" in prop.method
+    led_dev.apply(_approved(kp=prop.kp, ki=prop.ki, kd=prop.kd))
     after = led_dev.capture(duration=DURATION)
-    assert _overshoot(after) < 0.5 * _overshoot(before)
-    assert abs(after[after.t > 7].pv.mean() - 0.6) < 0.03
+    assert not analyze_control_loop(after).get("oscillation").detected
+    assert after[after.t > 6].pv.std() < 0.5 * df[df.t > 6].pv.std()
 
 
 # ---- the agent runs tool calls of one step in parallel threads: the port must be shared safely ----
