@@ -2,12 +2,21 @@
 
 It speaks the protocol in devices/serial_protocol.py, so the host code is exercised
 over a real serial device file (opened with pyserial like /dev/ttyACM0). The plant is
-an emulation of the hardware setup: a hobby servo whose position is read back by a
-potentiometer on its horn. The controller output is a velocity command, the servo
-follows with a first-order lag and a speed limit, and the pot reading has noise and
-10-bit quantization. Linux and macOS only (it needs os.openpty).
+an emulation of one of the two hardware setups:
 
-    diagagent-fw --time-scale 5      # prints the port name to give to --serial-port
+  servo  a hobby servo whose position is read back by a potentiometer on its horn. The
+         controller output is a velocity command in [-1, 1], the servo follows with a
+         first-order lag and a speed limit, the pot reading has noise and 10-bit
+         quantization.
+  led    an LED driven by PWM and an LDR that measures its light. The controller output is
+         the LED duty in [0, 1]. The light follows the duty with a first-order lag that is
+         faster when rising than when falling, the LDR response is nonlinear, and the
+         reading has noise and 10-bit quantization. The lag, the exponent and the noise
+         are assumptions, not measurements of a real LDR.
+
+Linux and macOS only (it needs os.openpty).
+
+    diagagent-fw --time-scale 5 [--plant led]    # prints the port name for --serial-port
 """
 
 from __future__ import annotations
@@ -29,23 +38,52 @@ SERVO_MAX_RATE = 3.0    # position units per second (a fast SG90)
 ADC_STEPS = 1023
 POT_NOISE = 0.003
 
+LED_TAU_RISE = 0.04     # s, light output follows a rising duty
+LED_TAU_FALL = 0.10     # s, and a falling one more slowly (the LDR is the slow part)
+LDR_GAMMA = 0.7         # LDR reading vs light: concave, pv = light ** gamma
+LDR_NOISE = 0.004
+
+PLANTS = ("servo", "led")
+DEFAULT_GAINS = {
+    "servo": {"kp": 3.0, "ki": 50.0, "kd": 0.0},
+    "led": {"kp": 10.0, "ki": 20.0, "kd": 0.0},
+}
+
+
+def u_limits(plant: str) -> tuple[float, float]:
+    return (P.LED_U_MIN, P.LED_U_MAX) if plant == "led" else (P.U_MIN, P.U_MAX)
+
 
 class _FwLoop:
-    """What the microcontroller does every sample: read pot, run PID, move servo."""
+    """What the microcontroller does every sample: read the sensor, run PID, drive the actuator."""
 
-    def __init__(self, gains: dict[str, float], start_pos: float, seed: int):
+    def __init__(self, gains: dict[str, float], start_pos: float, seed: int,
+                 plant: str = "servo", sp: float = P.BASE_SP):
         self.rng = np.random.default_rng(seed)
         self.g = gains
-        self.theta_cmd = self.theta = start_pos
+        self.plant = plant
+        self.u_min, self.u_max = u_limits(plant)
+        self.theta_cmd = self.theta = start_pos     # servo position, or LED light output
         self.integ = self.d_state = 0.0
         self.y_prev: float | None = None
         self.steps = 0
         self.a = math.exp(-P.SAMPLE_DT / SERVO_TAU)
+        if plant == "led":
+            # bumpless start, as the firmware does: first output = the LED duty set by HOME
+            ki, kp = gains["ki"], gains["kp"]
+            e0 = sp - self._measure()
+            self.integ = min(max((start_pos - kp * e0) / ki, 0.0), 1.0 / ki) if ki > 0.001 else 0.0
+
+    def _measure(self) -> float:
+        if self.plant == "led":
+            y = max(self.theta, 0.0) ** LDR_GAMMA + self.rng.normal(0.0, LDR_NOISE)
+        else:
+            y = self.theta + self.rng.normal(0.0, POT_NOISE)
+        return round(min(max(y, 0.0), 1.0) * ADC_STEPS) / ADC_STEPS
 
     def step(self, sp: float) -> tuple[float, float]:
         dt = P.SAMPLE_DT
-        y = self.theta + self.rng.normal(0.0, POT_NOISE)
-        y = round(min(max(y, 0.0), 1.0) * ADC_STEPS) / ADC_STEPS
+        y = self._measure()
         e = sp - y
         kp, ki, kd = self.g["kp"], self.g["ki"], self.g["kd"]
         raw_d = -(y - self.y_prev) / dt if self.y_prev is not None else 0.0
@@ -53,12 +91,16 @@ class _FwLoop:
         self.d_state = self.d_state + dt / (tf + dt) * (raw_d - self.d_state) if tf > 0 else raw_d
         self.y_prev = y
         u_unsat = kp * e + ki * self.integ + kd * self.d_state
-        u = min(max(u_unsat, P.U_MIN), P.U_MAX)
-        if not ((u_unsat > P.U_MAX and e > 0) or (u_unsat < P.U_MIN and e < 0)):
+        u = min(max(u_unsat, self.u_min), self.u_max)
+        if not ((u_unsat > self.u_max and e > 0) or (u_unsat < self.u_min and e < 0)):
             self.integ += e * dt
-        self.theta_cmd = min(max(self.theta_cmd + u * P.VMAX * dt, 0.0), 1.0)
-        target = self.theta + (self.theta_cmd - self.theta) * (1 - self.a)
-        self.theta += min(max(target - self.theta, -SERVO_MAX_RATE * dt), SERVO_MAX_RATE * dt)
+        if self.plant == "led":
+            tau = LED_TAU_RISE if u > self.theta else LED_TAU_FALL
+            self.theta += (u - self.theta) * (1 - math.exp(-dt / tau))
+        else:
+            self.theta_cmd = min(max(self.theta_cmd + u * P.VMAX * dt, 0.0), 1.0)
+            target = self.theta + (self.theta_cmd - self.theta) * (1 - self.a)
+            self.theta += min(max(target - self.theta, -SERVO_MAX_RATE * dt), SERVO_MAX_RATE * dt)
         self.steps += 1
         return y, u
 
@@ -69,8 +111,11 @@ class _FwLoop:
 
 class SimulatedFirmware:
     def __init__(self, gains: dict[str, float] | None = None, time_scale: float = 5.0,
-                 seed: int = 0):
-        self.gains = dict(gains or {"kp": 3.0, "ki": 50.0, "kd": 0.0})
+                 seed: int = 0, plant: str = "servo"):
+        if plant not in PLANTS:
+            raise ValueError(f"plant must be one of {PLANTS}")
+        self.plant = plant
+        self.gains = dict(gains or DEFAULT_GAINS[plant])
         self.time_scale, self.seed = time_scale, seed
         self.sp = P.BASE_SP
         self.pos = 0.0           # servo position when no loop runs
@@ -143,8 +188,9 @@ class SimulatedFirmware:
             self._send(P.HELLO)
         elif w[0] == "GET":
             g = self.gains
+            lo, hi = u_limits(self.plant)
             self._send(f"OK kp={g['kp']:.3f} ki={g['ki']:.3f} kd={g['kd']:.3f} "
-                       f"umin={P.U_MIN:.3f} umax={P.U_MAX:.3f} spmax={P.SP_MAX:.3f}")
+                       f"umin={lo:.3f} umax={hi:.3f} spmax={P.SP_MAX:.3f}")
         elif w[0] == "SET" and len(w) == 3 and w[1] in P.GAIN_LIMITS:
             try:
                 v = float(w[2])
@@ -177,7 +223,8 @@ class SimulatedFirmware:
             self._send("OK")
         elif w[0] == "RUN" and len(w) == 2 and w[1] in ("0", "1"):
             if w[1] == "1" and self._loop is None:
-                self._loop = _FwLoop(self.gains, self.pos, self.seed + self._runs)
+                self._loop = _FwLoop(self.gains, self.pos, self.seed + self._runs,
+                                     self.plant, self.sp)
                 self._runs += 1
                 self._t0 = time.monotonic()
             elif w[1] == "0" and self._loop is not None:
@@ -190,9 +237,11 @@ class SimulatedFirmware:
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="diagagent-fw", description="Simulated Arduino PID firmware")
     p.add_argument("--time-scale", type=float, default=1.0)
+    p.add_argument("--plant", choices=PLANTS, default="servo",
+                   help="servo: servo + pot emulation; led: LED + LDR emulation")
     a = p.parse_args(argv)
-    fw = SimulatedFirmware(time_scale=a.time_scale).start()
-    print(f"Simulated firmware on {fw.port} (time x{a.time_scale}). Ctrl+C to stop.")
+    fw = SimulatedFirmware(time_scale=a.time_scale, plant=a.plant).start()
+    print(f"Simulated firmware ({a.plant} plant) on {fw.port} (time x{a.time_scale}). Ctrl+C to stop.")
     try:
         while True:
             time.sleep(1)

@@ -16,3 +16,4 @@ jobs:
       - run: diagagent demo --backend offline --approve yes --out results
       - run: diagagent demo --backend offline --device modbus --approve yes --out results_modbus
       - run: diagagent demo --backend offline --device serial --approve yes --out results_serial
+      - run: diagagent demo --backend offline --device serial --fw-plant led --approve yes --out results_serial_led

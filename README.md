@@ -99,18 +99,28 @@ firmware validates gain limits itself, the host reads every write back, and a ca
 refused if the data is stale, has gaps or arrives damaged. Opening the port resets an
 Uno, so connecting waits about 2 s.
 
-`firmware/uno_pid/uno_pid.ino` is the Uno side: a 50 Hz PID position loop around an SG90
-servo, with a potentiometer on the servo horn on A0 as the measurement (wiring and a
-two-point calibration are in the sketch header). The sketch has an `EMULATED_PLANT` switch:
-1 (the default) runs the servo and pot as a model inside the Uno, with the real servo moving
-for show and no pot coupling needed; 0 reads the real pot for a true closed loop. Without hardware, `diagagent-fw` or
-`diagagent demo --device serial` run a simulated firmware on a pseudo-terminal, so the
-host code is tested over a real serial device file. That simulated plant (servo lag, speed
-limit, pot noise, 10-bit ADC) is an emulation, not a measurement of the real servo.
+`firmware/uno_pid/uno_pid.ino` is the Uno side: a 50 Hz PID loop with a `PLANT` switch.
+
+| `PLANT` | Actuator | Sensor | Status |
+|---|---|---|---|
+| 2 (default) | LED on D3 (PWM) | LDR divider on A0 | real loop, no mechanics, auto-calibrates at every reset |
+| 1 | servo on D9 (moves for show) | modelled in firmware | emulated plant |
+| 0 | servo on D9 | pot on the servo horn, A0 | real loop, needs a coupling and a hand calibration |
+
+With the LED + LDR plant the Uno drives the LED and reads how bright it is, so the loop is
+closed through hardware. `u` is the LED duty in [0, 1] and the plant is a lag with a static
+gain; with the servo plants `u` is a velocity command in [-1, 1]. The firmware reports its
+own limits in `GET`, and the host and the agent use those. Wiring and calibration notes are
+in the sketch header. Without hardware, `diagagent-fw` or `diagagent demo --device serial`
+run a simulated firmware on a pseudo-terminal (`--fw-plant servo|led`), so the host code is
+tested over a real serial device file. The simulated plants (servo lag and speed limit, LED
+and LDR lag, LDR exponent, noise, 10-bit ADC) are assumptions, not measurements of the real
+parts.
 
 ```bash
 pip install -e ".[serial]"
 diagagent demo --device serial --backend offline --approve yes                  # simulated firmware
+diagagent demo --device serial --fw-plant led --backend offline --approve yes   # simulated LED + LDR
 diagagent demo --device serial --serial-port /dev/ttyACM0 --backend ollama      # the real board
 claude mcp add diagagent -- "$(pwd)/.venv/bin/diagagent-mcp" --serial /dev/ttyACM0
 ```
@@ -215,8 +225,8 @@ src/diagagent/
   agent/     tools.py, graph.py (LangGraph + approval gate), llm.py, runner.py
   mcp_server.py   MCP server (stdio)
   cli.py, report.py
-firmware/    uno_pid/uno_pid.ino (Arduino Uno: servo + potentiometer PID loop)
-tests/       72 pytest tests, no LLM needed
+firmware/    uno_pid/uno_pid.ino (Arduino Uno: PID loop, LED + LDR / servo + pot plants)
+tests/       77 pytest tests, no LLM needed
 data/        sample_oscillating_loop.csv
 ```
 
@@ -262,7 +272,7 @@ scripted runs. Results go to `results/` (table, plot, audit log).
 | 2 | MCP server (read tools, write approval via elicitation) | done, tested with a scripted client |
 | 2 | Modbus TCP device + simulated PLC, `--device modbus` | done, tested; live run with qwen2.5:7b |
 | 2 | Serial device + Uno firmware, `--device serial` | done, tested over a pseudo-terminal against simulated firmware; sketch compiled and flashed to an Uno (PING, GET, ADC, HOME answer on the board); closed-loop run in emulated-plant mode pending |
-| 2 | Real hardware control demo (Uno + servo + pot) | planned: needs wiring, calibration and a live run |
+| 2 | Real hardware control demo (Uno + LED + LDR) | firmware written and syntax-checked, simulated plant tested; not yet compiled for the AVR or run on the board |
 | 2 | Modbus RTU | planned |
 | 2 | Modbus/OpenPLC alarm diagnosis with a register map | planned |
 | 3 | ROS 2 bag tools (IMU drift, dropouts, safety stops), CAN tools | planned |
@@ -306,7 +316,8 @@ data instead of trusting it.
 ## Known limitations (Phase 1 and 2)
 
 - The plants are simulated (first-order-plus-dead-time, and a servo-plus-pot emulation), not hardware measurements.
-- The Arduino sketch runs on the board, but its default plant is emulated in firmware; a loop closed through a real pot on the servo horn has not been run.
+- The Arduino sketch ran on the board only in its servo plant modes. The LED + LDR mode (now the default) is written and tested against a simulated plant, but has not been compiled for the AVR or run on the board yet, and a loop closed through the real LDR has not been run. Its demo gains are a first guess for the real parts.
+- On the simulated LED plant the retune works for an aggressive-but-settling tune (27 % overshoot to 6.7 %), but not for a high Kp that makes the LED duty bounce between 0 and 1: there the Tyreus-Luyben rule takes the current Kp as the ultimate gain, which overestimates it when saturation is what limits the oscillation, and the retuned loop still rings (about 50 % overshoot in simulation).
 - The retune rule assumes the oscillation is caused by excessive gain. In the demo
   the controller output also touches its lower limit during each cycle; the
   saturation detector reports 12 % time at limit, under its 20 % threshold.

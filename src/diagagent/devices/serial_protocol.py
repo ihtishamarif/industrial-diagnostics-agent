@@ -16,9 +16,13 @@ apart by their first characters.
 
     data line while running:   D,<ms since RUN 1>,<setpoint>,<pv>,<u>
 
-Units: setpoint and pv are the normalized position of the actuator, 0.0 to 1.0
-(1.0 = the full travel of the servo). u is the controller output in [-1, 1]: it is
-a velocity command, the commanded position moves by u * VMAX per second.
+Units: setpoint and pv are normalized sensor readings, 0.0 to 1.0. The firmware says in
+GET what range u has (umin, umax), and the host uses those limits as they come:
+
+    servo plant   pv = servo position (1.0 = full travel), u in [-1, 1] is a velocity
+                  command: the commanded position moves by u * VMAX per second.
+    LED plant     pv = LDR reading between LED off (0.0) and LED full (1.0), u in [0, 1]
+                  is the LED duty itself.
 """
 
 VERSION = 1
@@ -26,7 +30,8 @@ BAUD = 115200
 HELLO = f"OK diagfw {VERSION}"
 
 GAIN_LIMITS = {"kp": (0.0, 50.0), "ki": (0.0, 50.0), "kd": (0.0, 20.0)}
-U_MIN, U_MAX = -1.0, 1.0
+U_MIN, U_MAX = -1.0, 1.0          # servo plant: velocity command
+LED_U_MIN, LED_U_MAX = 0.0, 1.0   # LED plant: duty
 SP_MAX = 0.9          # highest setpoint a step test may use
 BASE_SP = 0.2         # the loop is homed here before a step test
 VMAX = 2.0            # position units per second at |u| = 1

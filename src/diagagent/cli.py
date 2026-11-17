@@ -39,7 +39,7 @@ def _print_event(ev: dict) -> None:
                 print(f"[{node}] <- {m.name}: {txt[:160]}{'...' if len(txt) > 160 else ''}")
 
 
-def _make_device(kind: str, serial_port: str | None = None):
+def _make_device(kind: str, serial_port: str | None = None, fw_plant: str = "servo"):
     """Build the device to diagnose. Returns (device, cleanup function)."""
     if kind == "serial":
         from .devices.serial_device import SerialPIDDevice
@@ -50,9 +50,9 @@ def _make_device(kind: str, serial_port: str | None = None):
             return dev, dev.close
         from .sim.serial_fw import SimulatedFirmware
 
-        fw = SimulatedFirmware(time_scale=5.0).start()  # firmware stand-in on a pseudo-terminal
+        fw = SimulatedFirmware(time_scale=5.0, plant=fw_plant).start()  # stand-in on a pseudo-terminal
         dev = SerialPIDDevice(fw.port, reset_delay=0.0)
-        print(f"Using simulated Arduino firmware on {fw.port}")
+        print(f"Using simulated Arduino firmware ({fw_plant} plant) on {fw.port}")
         return dev, lambda: (dev.close(), fw.stop())
     if kind == "modbus":
         from .devices.modbus_device import ModbusPIDDevice
@@ -66,7 +66,7 @@ def _make_device(kind: str, serial_port: str | None = None):
 
 
 def cmd_demo(a: argparse.Namespace) -> int:
-    dev, cleanup = _make_device(a.device, a.serial_port)
+    dev, cleanup = _make_device(a.device, a.serial_port, a.fw_plant)
     atexit.register(cleanup)
     gains_before = dev.read_params()
     ctx = ToolContext(devices={dev.device_id: dev})
@@ -121,6 +121,8 @@ def main(argv: list[str] | None = None) -> int:
                         "serial: Arduino-style firmware over a serial port (simulated unless --serial-port)")
     d.add_argument("--serial-port", default=None, metavar="PORT",
                    help="with --device serial: a real port such as /dev/ttyACM0")
+    d.add_argument("--fw-plant", default="servo", choices=["servo", "led"],
+                   help="with simulated serial firmware: servo + pot, or LED + LDR")
     d.add_argument("--approve", default="ask", choices=["ask", "yes", "no"])
     d.add_argument("--out", default="results")
     d.set_defaults(func=cmd_demo)

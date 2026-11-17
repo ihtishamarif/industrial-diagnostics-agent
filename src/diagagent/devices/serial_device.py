@@ -109,6 +109,14 @@ class SerialPIDDevice:
         g = self._get()
         return {"kp": g["kp"], "ki": g["ki"], "kd": g["kd"], "u_min": g["umin"], "u_max": g["umax"]}
 
+    @staticmethod
+    def _units(g: dict[str, float]) -> str:
+        if g["umin"] < 0:
+            return ("setpoint and pv are normalized servo position (0 to 1); "
+                    f"u is a velocity command in [{g['umin']:g}, {g['umax']:g}]")
+        return ("setpoint and pv are the normalized sensor reading (0 to 1); "
+                f"u is the actuator drive (LED duty) in [{g['umin']:g}, {g['umax']:g}]")
+
     def info(self) -> dict[str, Any]:
         g = self._get()
         return {
@@ -123,7 +131,7 @@ class SerialPIDDevice:
                 "max_duration_s": MAX_DURATION,
             },
             "writable": {k: list(v) for k, v in P.GAIN_LIMITS.items()},
-            "units": "setpoint and pv are normalized servo position (0 to 1); u is a velocity command in [-1, 1]",
+            "units": self._units(g),
             "transport": {"protocol": "serial-ascii", "port": self.port, "baud": self.baud},
         }
 

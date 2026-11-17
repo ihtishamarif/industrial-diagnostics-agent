@@ -124,3 +124,48 @@ def test_loop_is_left_stopped_after_a_failed_capture(dev, fw):
         dev.capture(setpoint=5.0)
     dev.capture(duration=3.0)
     assert fw._loop is None
+
+
+# ---- LED + LDR plant: output is the LED duty in [0, 1], the plant has no integrator ----------
+
+@pytest.fixture
+def led_dev():
+    with SimulatedFirmware(time_scale=10.0, plant="led") as f:
+        d = SerialPIDDevice(f.port, reset_delay=0.0)
+        yield d
+        d.close()
+
+
+def _overshoot(df, target=0.6):
+    return (df[df.t > 1].pv.max() - target) / (target - P.BASE_SP)
+
+
+def test_unknown_plant_is_rejected():
+    with pytest.raises(ValueError):
+        SimulatedFirmware(plant="stepper")
+
+
+def test_led_plant_reports_its_own_limits_and_units(led_dev):
+    info = led_dev.info()
+    assert info["actuator_limits"] == {"u_min": P.LED_U_MIN, "u_max": P.LED_U_MAX}
+    assert "LED duty" in info["units"] and "velocity" not in info["units"]
+    assert info["gains"] == {"kp": 10.0, "ki": 20.0, "kd": 0.0}
+
+
+def test_servo_plant_units_still_say_velocity(dev):
+    assert "velocity command" in dev.info()["units"]
+
+
+def test_led_capture_stays_inside_duty_limits_and_overshoots(led_dev):
+    df = led_dev.capture(duration=DURATION)
+    assert df.u.min() >= P.LED_U_MIN - 1e-9 and df.u.max() <= P.LED_U_MAX + 1e-9
+    assert _overshoot(df) > 0.15
+    assert abs(df[df.t > 6].pv.mean() - 0.6) < 0.03      # integral action still reaches the setpoint
+
+
+def test_led_retune_cuts_the_overshoot(led_dev):
+    before = led_dev.capture(duration=DURATION)
+    led_dev.apply(_approved(kp=6.0, ki=12.0, kd=0.0))
+    after = led_dev.capture(duration=DURATION)
+    assert _overshoot(after) < 0.5 * _overshoot(before)
+    assert abs(after[after.t > 7].pv.mean() - 0.6) < 0.03
