@@ -10,9 +10,10 @@
  *            and a two-point calibration.
  *
  * Wiring, PLANT 2
- *   D9 -> 220 ohm -> LED anode (long leg); LED cathode (short leg) -> GND
- *   (D9 is driven by Timer1 as a 12-bit PWM, 3.9 kHz: the LDR curve is steep at low
- *   brightness, and the 8-bit PWM of other pins is too coarse for it)
+ *   D3 (PWM) -> 220 ohm -> LED anode (long leg); LED cathode (short leg) -> GND
+ *   Optional finer PWM: set LED_HIRES to 1 and move the LED wire to D9 (Timer1, 12 bit,
+ *   3.9 kHz). The LDR curve is steep at low brightness, so one 8-bit step on D3 moves pv by
+ *   up to about 0.03 there; the 12-bit PWM makes that step negligible.
  *   5V -> LDR -> A0, and A0 -> 10 kohm -> GND   (A0 is the middle of the divider)
  *   Face the LED at the LDR, 3 to 10 mm apart, and tape a dark tube around both so room
  *   light does not dominate. Nothing else may be connected to A0 (unplug the pot wiper).
@@ -54,6 +55,7 @@
 
 #define PLANT 2                      // 2: LED + LDR, 1: emulated servo + pot, 0: servo + real pot
 #define AUTO_CAL 1                   // PLANT 2: calibrate LED off / full at every reset
+#define LED_HIRES 0                  // PLANT 2: 0 = LED on D3, 8-bit PWM; 1 = LED on D9, 12-bit PWM
 
 #define EMULATED_PLANT (PLANT == 1)
 #define LDR_PLANT (PLANT == 2)
@@ -66,8 +68,12 @@ const int US_AT_1 = 2300;            // pulse width for position 1
 Servo servo;
 #endif
 
+#if LED_HIRES
 const uint8_t LED_PIN = 9;           // PLANT 2: Timer1 OC1A, 12-bit PWM output to the LED
 const uint16_t PWM_TOP = 4095;
+#else
+const uint8_t LED_PIN = 3;           // PLANT 2: PWM output to the LED (analogWrite, 8 bit)
+#endif
 const uint8_t ADC_PIN = A0;          // pot wiper (PLANT 0) or LDR divider (PLANT 2)
 const int ADC_AT_0 = LDR_PLANT ? 50 : 100;    // fixed calibration: reading at pv = 0
 const int ADC_AT_1 = LDR_PLANT ? 800 : 900;   // fixed calibration: reading at pv = 1
@@ -147,15 +153,21 @@ float readPv() {
 #if LDR_PLANT
 void pwmBegin() {
   pinMode(LED_PIN, OUTPUT);
+#if LED_HIRES
   TCCR1A = _BV(COM1A1) | _BV(WGM11);                 // fast PWM, TOP = ICR1, non-inverting on D9
   TCCR1B = _BV(WGM13) | _BV(WGM12) | _BV(CS10);      // no prescaler: 16 MHz / 4096 = 3.9 kHz
   ICR1 = PWM_TOP;
   OCR1A = 0;
+#endif
 }
 
 void setLed(float duty) {
   ledDuty = constrain(duty, 0.0f, 1.0f);
+#if LED_HIRES
   OCR1A = (uint16_t)(ledDuty * PWM_TOP + 0.5f);
+#else
+  analogWrite(LED_PIN, (int)(ledDuty * 255.0f + 0.5f));
+#endif
 }
 
 // Open loop: find the LED duty that gives pv = target. The static curve rises with duty but is

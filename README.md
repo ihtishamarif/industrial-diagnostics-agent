@@ -103,7 +103,7 @@ Uno, so connecting waits about 2 s.
 
 | `PLANT` | Actuator | Sensor | Status |
 |---|---|---|---|
-| 2 (default) | LED on D9 (12-bit PWM) | LDR divider on A0 | real loop, no mechanics, auto-calibrates at every reset |
+| 2 (default) | LED on D3 (PWM; D9 with 12-bit PWM is an option) | LDR divider on A0 | real loop, no mechanics, auto-calibrates at every reset |
 | 1 | servo on D9 (moves for show) | modelled in firmware | emulated plant |
 | 0 | servo on D9 | pot on the servo horn, A0 | real loop, needs a coupling and a hand calibration |
 
