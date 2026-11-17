@@ -14,9 +14,9 @@ detectors returned.
 ![demo](docs/demo.gif)
 
 > Status: **Phase 1 of 4 complete; Phase 2 is partly done** (MCP server, Modbus TCP and a
-> serial device with Arduino firmware are built and tested against simulators; the firmware
-> has not been run on the real board yet). Everything marked "planned"
-> does not exist yet.
+> serial device with Arduino firmware are built; the serial device also ran a real closed loop
+> on an Arduino Uno with an LED and an LDR, see [the real-board results](#real-board-results)).
+> Everything marked "planned" does not exist yet.
 > See [Status](#status).
 
 ## Phase 1 demo: PID oscillation diagnosis and retune
@@ -272,7 +272,7 @@ scripted runs. Results go to `results/` (table, plot, audit log).
 | 2 | MCP server (read tools, write approval via elicitation) | done, tested with a scripted client |
 | 2 | Modbus TCP device + simulated PLC, `--device modbus` | done, tested; live run with qwen2.5:7b |
 | 2 | Serial device + Uno firmware, `--device serial` | done, tested over a pseudo-terminal against simulated firmware; sketch compiled and flashed to an Uno (PING, GET, ADC, HOME answer on the board); closed-loop run in emulated-plant mode pending |
-| 2 | Real hardware control demo (Uno + LED + LDR) | firmware written and syntax-checked, simulated plant tested; not yet compiled for the AVR or run on the board |
+| 2 | Real hardware control demo (Uno + LED + LDR) | done: real LED + LDR loop on an Uno, offline planner, 3 runs; the Ollama run on the board is not done yet |
 | 2 | Modbus RTU | planned |
 | 2 | Modbus/OpenPLC alarm diagnosis with a register map | planned |
 | 3 | ROS 2 bag tools (IMU drift, dropouts, safety stops), CAN tools | planned |
@@ -312,6 +312,31 @@ is put back.
 Takeaways: check the model's prose against the measured numbers (the 7B model also said
 Kd was "kept" when it went from 0 to 0.46), and make the data path refuse implausible
 data instead of trusting it.
+
+## Real-board results
+
+Arduino Uno, LED on D9 (12-bit PWM), LDR on A0, 50 Hz PID loop in the firmware, constant room light. The agent
+(offline planner, operator approval) captured a 0.2 to 0.6 setpoint step, found a sustained oscillation, proposed
+new gains and re-measured. The starting gains kp 1, ki 1 were chosen by hand because they oscillate; the agent did
+not find that tune itself. Three runs, each from a fresh board reset:
+
+| run | overshoot | settling time | oscillating |
+|---|---|---|---|
+| 1 | 71.7 % to 1.65 % | not settled to 0.58 s | yes to no |
+| 2 | 71.3 % to 1.95 % | not settled to 0.58 s | yes to no |
+| 3 | 69.9 % to 1.77 % | not settled to 0.52 s | yes to no |
+
+The agent measured a period of 0.040 s (two samples, the Nyquist limit of the 50 Hz loop) and proposed a PI retune,
+kp 0.3125 and ki 3.55, with no derivative term. These are measurements on the real plant; the "before" pv noise
+figure (std about 0.4) is the oscillation itself, the sensor noise measured at constant light is about 0.004.
+
+## Lesson from the real board: aliasing
+
+The first retunes failed (overshoot 67 % to 181 %). The host resampled the 50 Hz data to a 20 Hz grid, which turned
+the real 25 Hz oscillation into 5 Hz. The retune rule then used a period five times too long and added a derivative
+term that boosted gain right at the Nyquist frequency. A raw FFT of the board data showed 25.0 Hz. Fixes: capture at the
+loop's own sample time, use PI when the period is under 8 samples, and a regression test on a simulated plant that
+reproduces the failure.
 
 ## Lesson from the first run on the real board
 
