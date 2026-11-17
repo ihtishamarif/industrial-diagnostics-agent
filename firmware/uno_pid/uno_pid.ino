@@ -10,7 +10,9 @@
  *            and a two-point calibration.
  *
  * Wiring, PLANT 2
- *   D3 (PWM) -> 220 ohm -> LED anode (long leg); LED cathode (short leg) -> GND
+ *   D9 -> 220 ohm -> LED anode (long leg); LED cathode (short leg) -> GND
+ *   (D9 is driven by Timer1 as a 12-bit PWM, 3.9 kHz: the LDR curve is steep at low
+ *   brightness, and the 8-bit PWM of other pins is too coarse for it)
  *   5V -> LDR -> A0, and A0 -> 10 kohm -> GND   (A0 is the middle of the divider)
  *   Face the LED at the LDR, 3 to 10 mm apart, and tape a dark tube around both so room
  *   light does not dominate. Nothing else may be connected to A0 (unplug the pot wiper).
@@ -64,13 +66,16 @@ const int US_AT_1 = 2300;            // pulse width for position 1
 Servo servo;
 #endif
 
-const uint8_t LED_PIN = 3;           // PLANT 2: PWM output to the LED
+const uint8_t LED_PIN = 9;           // PLANT 2: Timer1 OC1A, 12-bit PWM output to the LED
+const uint16_t PWM_TOP = 4095;
 const uint8_t ADC_PIN = A0;          // pot wiper (PLANT 0) or LDR divider (PLANT 2)
 const int ADC_AT_0 = LDR_PLANT ? 50 : 100;    // fixed calibration: reading at pv = 0
 const int ADC_AT_1 = LDR_PLANT ? 800 : 900;   // fixed calibration: reading at pv = 1
 const int MIN_CAL_RANGE = 60;        // PLANT 2: smaller LED-off/LED-full difference = wiring fault
 const unsigned long CAL_SETTLE_MS = 400;      // PLANT 2: let the LDR settle after a LED change
 const uint8_t ADC_AVG = 4;           // PLANT 2: readings averaged per sample
+const unsigned long HOME_STEP_MS = 250UL;     // PLANT 2: wait per step while HOME searches for a duty
+const uint8_t HOME_STEPS = 10;
 
 const float VMAX = 2.0f;             // servo: position units per second at |u| = 1
 #if LDR_PLANT
@@ -139,12 +144,33 @@ float readPv() {
 #endif
 }
 
-void setLed(float duty) {
-  ledDuty = constrain(duty, 0.0f, 1.0f);
-  analogWrite(LED_PIN, (int)(ledDuty * 255.0f + 0.5f));
+#if LDR_PLANT
+void pwmBegin() {
+  pinMode(LED_PIN, OUTPUT);
+  TCCR1A = _BV(COM1A1) | _BV(WGM11);                 // fast PWM, TOP = ICR1, non-inverting on D9
+  TCCR1B = _BV(WGM13) | _BV(WGM12) | _BV(CS10);      // no prescaler: 16 MHz / 4096 = 3.9 kHz
+  ICR1 = PWM_TOP;
+  OCR1A = 0;
 }
 
-#if LDR_PLANT
+void setLed(float duty) {
+  ledDuty = constrain(duty, 0.0f, 1.0f);
+  OCR1A = (uint16_t)(ledDuty * PWM_TOP + 0.5f);
+}
+
+// Open loop: find the LED duty that gives pv = target. The static curve rises with duty but is
+// strongly nonlinear (duty 0.1 already gives pv 0.5), so bisect instead of assuming duty = pv.
+float findDuty(float target) {
+  float lo = 0.0f, hi = 1.0f;
+  for (uint8_t i = 0; i < HOME_STEPS; i++) {
+    float mid = 0.5f * (lo + hi);
+    setLed(mid);
+    delay(HOME_STEP_MS);                             // let the LDR settle (it falls slowly)
+    if (readPv() < target) lo = mid; else hi = mid;
+  }
+  return 0.5f * (lo + hi);
+}
+
 // Measure the LDR with the LED off and at full power. Returns false if they are too close.
 bool calibrate() {
   setLed(0.0f);
@@ -230,7 +256,10 @@ void handle(char *cmd) {
     if (running) { Serial.println(F("ERR state")); return; }
     if (v < 0 || v > 1) { Serial.println(F("ERR range")); return; }
 #if LDR_PLANT
-    setLed(v);                         // open loop: LED duty = v, then let the LDR settle
+    setLed(findDuty(v));               // open loop: the duty that gives pv = v (not duty = v)
+    delay(300);                        // let the LDR settle
+    Serial.println(F("OK"));
+    return;
 #else
     servo.attach(SERVO_PIN);
     thetaCmd = v;
@@ -280,7 +309,7 @@ void handle(char *cmd) {
 void setup() {
   Serial.begin(115200);
 #if LDR_PLANT
-  pinMode(LED_PIN, OUTPUT);
+  pwmBegin();
   setLed(0.0f);
 #if AUTO_CAL
   calOk = calibrate();                 // the host retries PING for 5 s, so this ~1 s is fine

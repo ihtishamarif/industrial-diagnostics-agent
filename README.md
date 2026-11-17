@@ -103,7 +103,7 @@ Uno, so connecting waits about 2 s.
 
 | `PLANT` | Actuator | Sensor | Status |
 |---|---|---|---|
-| 2 (default) | LED on D3 (PWM) | LDR divider on A0 | real loop, no mechanics, auto-calibrates at every reset |
+| 2 (default) | LED on D9 (12-bit PWM) | LDR divider on A0 | real loop, no mechanics, auto-calibrates at every reset |
 | 1 | servo on D9 (moves for show) | modelled in firmware | emulated plant |
 | 0 | servo on D9 | pot on the servo horn, A0 | real loop, needs a coupling and a hand calibration |
 
@@ -226,7 +226,7 @@ src/diagagent/
   mcp_server.py   MCP server (stdio)
   cli.py, report.py
 firmware/    uno_pid/uno_pid.ino (Arduino Uno: PID loop, LED + LDR / servo + pot plants)
-tests/       78 pytest tests, no LLM needed
+tests/       79 pytest tests, no LLM needed
 data/        sample_oscillating_loop.csv
 ```
 

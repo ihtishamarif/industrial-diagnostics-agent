@@ -219,7 +219,8 @@ class SimulatedFirmware:
                 return self._send("ERR value")
             if self._loop is not None or not (0.0 <= v <= 1.0):
                 return self._send("ERR state" if self._loop else "ERR range")
-            self.pos = v
+            # servo: position v. LED: the light that makes the LDR read v (as the firmware does)
+            self.pos = v ** (1.0 / LDR_GAMMA) if self.plant == "led" else v
             self._send("OK")
         elif w[0] == "RUN" and len(w) == 2 and w[1] in ("0", "1"):
             if w[1] == "1" and self._loop is None:

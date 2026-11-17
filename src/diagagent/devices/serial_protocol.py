@@ -10,7 +10,7 @@ apart by their first characters.
     GET                    OK kp=4.000 ki=1.500 kd=0.000 umin=-1.000 umax=1.000 spmax=0.900
     SET kp 1.82            OK kp=1.820        or  ERR range   (the device validates itself)
     SP 0.6                 OK                 or  ERR range
-    HOME 0.2               OK                 (moves to a start position, blocks ~1.5 s)
+    HOME 0.2               OK                 (goes to the start where pv = 0.2, blocks 1.5 to 3 s)
     RUN 1                  OK, then data lines
     RUN 0                  OK, data lines stop
 

@@ -163,6 +163,13 @@ def test_led_capture_stays_inside_duty_limits_and_overshoots(led_dev):
     assert abs(df[df.t > 6].pv.mean() - 0.6) < 0.03      # integral action still reaches the setpoint
 
 
+def test_led_home_goes_to_the_base_setpoint_not_to_duty_equals_pv(led_dev):
+    df = led_dev.capture(duration=3.0)
+    assert abs(df.pv.iloc[0] - P.BASE_SP) < 0.05      # the test starts where it says it starts
+    again = led_dev.capture(duration=3.0)
+    assert abs(again.pv.iloc[0] - P.BASE_SP) < 0.05
+
+
 def test_led_retune_cuts_the_overshoot(led_dev):
     before = led_dev.capture(duration=DURATION)
     led_dev.apply(_approved(kp=6.0, ki=12.0, kd=0.0))
